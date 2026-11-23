@@ -1,0 +1,445 @@
+{
+  "info": {
+    "name": "Eventopolis Messaging API (local)",
+    "description": "Flujo: 1) Health, 2) Admin > Crear app cliente (guarda apiKey y webhookSecret solos), 3) probar el resto. Variables: baseUrl, adminKey (= ADMIN_API_KEY del .env). Sin credenciales de Meta, los envios responden 503 NOT_CONFIGURED.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5100"
+    },
+    {
+      "key": "adminKey",
+      "value": "PON_AQUI_TU_ADMIN_API_KEY"
+    },
+    {
+      "key": "apiKey",
+      "value": ""
+    },
+    {
+      "key": "webhookSecret",
+      "value": ""
+    },
+    {
+      "key": "clientId",
+      "value": ""
+    },
+    {
+      "key": "messageId",
+      "value": ""
+    },
+    {
+      "key": "phone",
+      "value": "5512345678"
+    },
+    {
+      "key": "appSecret",
+      "value": "TU_WHATSAPP_APP_SECRET"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "Admin",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminKey}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Crear app cliente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.apiKey) {",
+                  "  pm.collectionVariables.set('apiKey', j.apiKey);",
+                  "  pm.collectionVariables.set('webhookSecret', j.webhookSecret);",
+                  "  pm.collectionVariables.set('clientId', j.client.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/admin/clients",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Eventopolis local\",\n  \"webhookUrl\": \"https://webhook.site/TU-ID\",\n  \"dailyLimit\": 100\n}"
+            }
+          }
+        },
+        {
+          "name": "Listar apps cliente",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/admin/clients"
+          }
+        },
+        {
+          "name": "Editar app cliente",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/admin/clients/{{clientId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dailyLimit\": 500,\n  \"active\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "Rotar llave de API",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.apiKey) pm.collectionVariables.set('apiKey', j.apiKey);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/admin/clients/{{clientId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rotateKey\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "Crear plantilla en Meta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/admin/templates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"aviso_prueba\",\n  \"language\": \"es_MX\",\n  \"category\": \"UTILITY\",\n  \"components\": [\n    {\n      \"type\": \"BODY\",\n      \"text\": \"Hola {{nombre}}, este es un aviso de prueba.\",\n      \"example\": { \"body_text_named_params\": [{ \"param_name\": \"nombre\", \"example\": \"Ana\" }] }\n    }\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cliente",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{apiKey}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Mi app (me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/me"
+          }
+        },
+        {
+          "name": "Enviar plantilla",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "const m = j.message || j;",
+                  "if (m && m.id) pm.collectionVariables.set('messageId', m.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/template",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"{{phone}}\",\n  \"template\": \"aviso_prueba\",\n  \"language\": \"es_MX\",\n  \"parameters\": {\n    \"body\": { \"nombre\": \"Ana\" }\n  },\n  \"ref\": \"event:1\",\n  \"metadata\": { \"invitationId\": 10 },\n  \"idempotencyKey\": \"prueba-001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Enviar plantilla con boton URL",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/template",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"{{phone}}\",\n  \"template\": \"recordatorio_evento\",\n  \"parameters\": {\n    \"body\": { \"nombre\": \"Ana\", \"evento\": \"Boda\", \"fecha\": \"sabado 20\", \"hora\": \"1:00 p.m.\", \"lugar\": \"Salon\" },\n    \"buttonUrlSuffix\": \"EVENTUUID/CONTACTUUID\"\n  },\n  \"ref\": \"event:1\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Enviar plantillas en lote",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/template/batch",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messages\": [\n    { \"to\": \"{{phone}}\", \"template\": \"aviso_prueba\", \"parameters\": { \"body\": { \"nombre\": \"Ana\" } }, \"ref\": \"event:1\", \"idempotencyKey\": \"lote-1\" },\n    { \"to\": \"5598765432\", \"template\": \"aviso_prueba\", \"parameters\": { \"body\": { \"nombre\": \"Luis\" } }, \"ref\": \"event:1\", \"idempotencyKey\": \"lote-2\" }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Enviar texto (ventana 24 h)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/v1/messages/text",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": \"{{phone}}\",\n  \"text\": \"Gracias por escribirnos, te esperamos!\",\n  \"ref\": \"event:1\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Listar mensajes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/messages?ref=event:1&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "ref",
+                  "value": "event:1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "phone",
+                  "value": "{{phone}}",
+                  "disabled": true
+                },
+                {
+                  "key": "direction",
+                  "value": "out",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "failed",
+                  "disabled": true
+                },
+                {
+                  "key": "since",
+                  "value": "2026-11-01T00:00:00Z",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Ver un mensaje",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/messages/{{messageId}}"
+          }
+        },
+        {
+          "name": "Conversaciones",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/conversations?ref=event:1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "conversations"
+              ],
+              "query": [
+                {
+                  "key": "ref",
+                  "value": "event:1"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Conversaciones sin leer",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/conversations/unread"
+          }
+        },
+        {
+          "name": "Hilo de una conversacion",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/v1/conversations/{{phone}}"
+          }
+        },
+        {
+          "name": "Marcar conversacion como leida",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/v1/conversations/{{phone}}/read"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhook de Meta (simulado)",
+      "item": [
+        {
+          "name": "Verificacion (GET)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=TU_WHATSAPP_VERIFY_TOKEN&hub.challenge=1234",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "whatsapp"
+              ],
+              "query": [
+                {
+                  "key": "hub.mode",
+                  "value": "subscribe"
+                },
+                {
+                  "key": "hub.verify_token",
+                  "value": "TU_WHATSAPP_VERIFY_TOKEN"
+                },
+                {
+                  "key": "hub.challenge",
+                  "value": "1234"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Mensaje entrante (POST firmado)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Firma HMAC-SHA256 del cuerpo con WHATSAPP_APP_SECRET. Define la variable de coleccion appSecret.",
+                  "const secret = pm.collectionVariables.get('appSecret') || '';",
+                  "const body = pm.request.body.raw.replace(/\\{\\{phone\\}\\}/g, '52' + pm.collectionVariables.get('phone'));",
+                  "pm.request.body.raw = body;",
+                  "const sig = CryptoJS.HmacSHA256(body, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.request.headers.upsert({ key: 'X-Hub-Signature-256', value: 'sha256=' + sig });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/webhooks/whatsapp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"object\":\"whatsapp_business_account\",\"entry\":[{\"changes\":[{\"field\":\"messages\",\"value\":{\"contacts\":[{\"profile\":{\"name\":\"Ana\"},\"wa_id\":\"{{phone}}\"}],\"messages\":[{\"from\":\"{{phone}}\",\"id\":\"wamid.TEST001\",\"timestamp\":\"1790000000\",\"type\":\"text\",\"text\":{\"body\":\"Hola, a que hora es?\"}}]}}]}]}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

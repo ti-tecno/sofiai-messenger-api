@@ -1,0 +1,19 @@
+{
+  "name": "eventopolis-messaging-api",
+  "version": "1.0.0",
+  "description": "API de mensajería WhatsApp (Cloud API de Meta) para cualquier software de Eventopolis",
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env --watch server.js",
+    "migrate": "node --env-file=.env scripts/migrate.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.22.1",
+    "mysql2": "^3.6.5"
+  }
+}
