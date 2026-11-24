@@ -24,6 +24,13 @@ export function buildTables(prefix) {
 // Nombre sin backticks (para information_schema y para nombrar índices/llaves foráneas).
 export const rawName = (prefix, base) => `${validateTablePrefix(prefix)}${base}`;
 
-export const TABLE_PREFIX = validateTablePrefix(process.env.DB_TABLE_PREFIX?.trim());
+// Al importar este módulo se valida la configuración: si es inválida, no arranca (servidor ni migración).
+function configuredPrefix() {
+  try { return validateTablePrefix(process.env.DB_TABLE_PREFIX?.trim()); } catch (err) {
+    console.error(`Error de configuración: ${err.message}`);
+    process.exit(1);
+  }
+}
+export const TABLE_PREFIX = configuredPrefix();
 export const T = buildTables(TABLE_PREFIX);
 export const tn = (base) => rawName(TABLE_PREFIX, base);
