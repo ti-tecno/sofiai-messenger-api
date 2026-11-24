@@ -19,8 +19,7 @@ SECRETS_DIR=${SECRETS_DIR:-/root/secrets/sofiai-messenger-api}
 PM2_NAME=${PM2_NAME:-sofiai-messenger}   # nunca `pm2 restart all`: en este servidor corren otros proyectos
 BRANCH=${BRANCH:-develop}
 
-node_major=$(node -p 'process.versions.node.split(".")[0]')
-if [ "$node_major" -lt 20 ]; then
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>20||(a===20&&b>=6)?0:1)'; then
   echo "ERROR: se requiere Node >= 20.6 (hay $(node -v))" >&2
   exit 1
 fi
@@ -55,6 +54,15 @@ if [ ! -f "$SECRETS_DIR/.env" ]; then
   exit 2
 fi
 chmod 600 "$SECRETS_DIR"/.env*
+
+# Sin SEND_ALLOWLIST el mensajero puede escribir a cualquier teléfono. Mientras no se
+# decida pasar a producción de verdad, se exige; para quitarlo: ALLOW_ANY_RECIPIENT=1.
+env_value() { grep -E "^$1=" "$SECRETS_DIR/.env" | tail -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//' | tr -d '\r'; }
+if [ -z "$(env_value SEND_ALLOWLIST)" ] && [ "${ALLOW_ANY_RECIPIENT:-0}" != 1 ]; then
+  echo "ERROR: SEND_ALLOWLIST está vacía en $SECRETS_DIR/.env (el envío no estaría limitado)." >&2
+  echo "Llénala, o despliega con ALLOW_ANY_RECIPIENT=1 si ya es producción abierta." >&2
+  exit 1
+fi
 install -m 600 "$SECRETS_DIR/.env" "$APP_DIR/.env"
 
 # 3. Dependencias y migración (repetible)
@@ -74,10 +82,11 @@ fi
 [ "$before" != none ] && [ "$before" != "$after" ] && git log --oneline "$before..$after"
 
 # 5. Salud
-port=$(grep -E '^PORT=' .env | cut -d= -f2 | tr -d '\r"')
+port=$(env_value PORT)
+host=$(env_value HOST); host=${host:-127.0.0.1}; [ "$host" = 0.0.0.0 ] && host=127.0.0.1
 for _ in $(seq 1 15); do
-  if curl -fsk --max-time 3 "https://127.0.0.1:${port}/health" >/dev/null \
-     || curl -fs --max-time 3 "http://127.0.0.1:${port}/health" >/dev/null; then
+  if curl -fsk --max-time 3 "https://${host}:${port}/health" >/dev/null \
+     || curl -fs --max-time 3 "http://${host}:${port}/health" >/dev/null; then
     echo "OK: $PM2_NAME en $BRANCH $(git rev-parse --short HEAD), /health responde en el puerto $port."
     exit 0
   fi
