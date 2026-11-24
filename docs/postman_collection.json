@@ -1,6 +1,6 @@
 {
   "info": {
-    "name": "Eventopolis Messaging API (local)",
+    "name": "SofIA Messenger API (local)",
     "description": "Flujo: 1) Health, 2) Admin > Crear app cliente (guarda apiKey y webhookSecret solos), 3) probar el resto. Variables: baseUrl, adminKey (= ADMIN_API_KEY del .env). Sin credenciales de Meta, los envios responden 503 NOT_CONFIGURED.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -89,7 +89,7 @@
             "url": "{{baseUrl}}/v1/admin/clients",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Eventopolis local\",\n  \"webhookUrl\": \"https://webhook.site/TU-ID\",\n  \"dailyLimit\": 100\n}"
+              "raw": "{\n  \"name\": \"App de prueba local\",\n  \"webhookUrl\": \"https://webhook.site/TU-ID\",\n  \"dailyLimit\": 100\n}"
             }
           }
         },

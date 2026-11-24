@@ -1,14 +1,14 @@
-# Eventopolis Messaging API — Especificación v1
+# SofIA Messenger API — Especificación v1
 
-API REST para enviar y recibir mensajes de **WhatsApp** (Cloud API de Meta). Está pensada para que **cualquier software de Eventopolis** (backend de eventos, CRM, apps nuevas…) envíe mensajes sin hablar directamente con Meta y sin tener tablas de mensajes propias.
+API REST para enviar y recibir mensajes de **WhatsApp** (Cloud API de Meta). Está pensada para que **cualquier sistema** (backend de eventos, CRM, apps nuevas…) envíe mensajes sin hablar directamente con Meta y sin tener tablas de mensajes propias.
 
-Esta API **no sabe nada de eventos, invitaciones ni usuarios de Eventopolis**. Solo conoce: *a qué teléfono mando qué plantilla o texto*, *en qué estado quedó* y *qué contestó la persona*. Todo lo demás lo decide la app que la usa (cuándo enviar, a quién, qué texto) y lo ata con dos campos libres: `ref` y `metadata`.
+Esta API **no sabe nada de eventos, invitaciones ni usuarios de ningún sistema**. Solo conoce: *a qué teléfono mando qué plantilla o texto*, *en qué estado quedó* y *qué contestó la persona*. Todo lo demás lo decide la app que la usa (cuándo enviar, a quién, qué texto) y lo ata con dos campos libres: `ref` y `metadata`.
 
 ```
  ┌────────────────┐   POST /v1/messages/...    ┌──────────────────────┐   Cloud API   ┌────────┐
- │ App cliente    │ ─────────────────────────▶ │ Messaging API        │ ────────────▶ │  Meta  │
- │ (eventopolis-  │                            │  · BD propia         │ ◀──────────── │        │
- │  api, CRM, …)  │ ◀───────────────────────── │  · 1 número WhatsApp │   webhook     └────────┘
+ │ App cliente    │ ─────────────────────────▶ │ SofIA Messenger API  │ ────────────▶ │  Meta  │
+ │ (cualquier     │                            │  · BD propia         │ ◀──────────── │        │
+ │  sistema)      │ ◀───────────────────────── │  · 1 número WhatsApp │   webhook     └────────┘
  └────────────────┘   webhooks firmados        └──────────────────────┘
                       message.status / message.received
 ```
