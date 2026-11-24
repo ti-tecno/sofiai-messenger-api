@@ -52,10 +52,11 @@ async function resolvePhoneNumberId(flags) {
   if (flags['phone-number-id']) return flags['phone-number-id'];
   if (!flags.channel && process.env.WHATSAPP_PHONE_NUMBER_ID) return process.env.WHATSAPP_PHONE_NUMBER_ID;
   const { pool } = await import('../src/db.js');
+  const { T } = await import('../src/tables.js');
   try {
     const list = flags.channel
-      ? (await pool.query('SELECT phoneNumberId FROM channel WHERE slug = ?', [flags.channel]))[0]
-      : (await pool.query('SELECT phoneNumberId FROM channel WHERE active = 1 AND phoneNumberId IS NOT NULL'))[0];
+      ? (await pool.query(`SELECT phoneNumberId FROM ${T.channel} WHERE slug = ?`, [flags.channel]))[0]
+      : (await pool.query(`SELECT phoneNumberId FROM ${T.channel} WHERE active = 1 AND phoneNumberId IS NOT NULL`))[0];
     if (!list.length) throw new Error(flags.channel ? `No existe el canal "${flags.channel}"` : 'No hay canales; usa --channel o --phone-number-id');
     if (list.length > 1) throw new Error('Hay varios canales; indica --channel <slug>');
     if (!list[0].phoneNumberId) throw new Error('El canal no tiene phoneNumberId');

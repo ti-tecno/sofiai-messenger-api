@@ -1,5 +1,5 @@
 // Prueba de integración: necesita una MariaDB/MySQL vacía. Se omite sin TEST_DB_NAME.
-// TEST_DB_HOST/PORT/USER/PASSWORD/NAME. Meta se simula parchando fetch.
+// TEST_DB_HOST/PORT/USER/PASSWORD/NAME. TEST_DB_TABLE_PREFIX (opcional, p. ej. msg_) corre con prefijo de tablas. Meta se simula parchando fetch.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -13,6 +13,7 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
     DB_PASSWORD: process.env.TEST_DB_PASSWORD ?? '', DB_NAME: process.env.TEST_DB_NAME,
     ADMIN_API_KEY: 'admin-key-admin-key-admin-key-1234', WHATSAPP_TOKEN: 'tok', WA_TOKEN_SECOND: 'tok2',
     WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_VERIFY_TOKEN: 'verify',
+    DB_TABLE_PREFIX: process.env.TEST_DB_TABLE_PREFIX ?? '',
   });
 
   // Meta simulado
@@ -38,7 +39,8 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
   t.after(() => receiver.close());
 
   const { pool } = await import('../src/db.js');
-  for (const table of ['message', 'client_channel', 'channel', 'client']) await pool.query(`DROP TABLE IF EXISTS ${table}`);
+  const { T } = await import('../src/tables.js');
+  for (const table of [T.message, T.client_channel, T.channel, T.client]) await pool.query(`DROP TABLE IF EXISTS ${table}`);
   const migrate = (await import('../scripts/migrate.js')).migrate;
   await migrate();
   await migrate(); // repetible
@@ -237,7 +239,7 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
   assert.ok(first777);
   assert.equal(first777.ref, null);
   assert.equal((await incoming(appB.apiKey)).some((m) => m.text === 'canal ajeno'), false);
-  const [{ n }] = await pool.query("SELECT COUNT(*) AS n FROM message WHERE body = 'canal ajeno'").then(([r]) => r);
+  const [{ n }] = await pool.query(`SELECT COUNT(*) AS n FROM ${T.message} WHERE body = 'canal ajeno'`).then(([r]) => r);
   assert.equal(Number(n), 0, 'un canal desconocido no se guarda');
 
   // Sandbox: SEND_ALLOWLIST rechaza antes de guardar o llamar a Meta

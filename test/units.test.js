@@ -117,3 +117,31 @@ test('tokenFor lee el token de la variable indicada en tokenEnv', async () => {
   assert.equal(tokenFor({ tokenEnv: 'NO_EXISTE_VAR' }), null);
   delete process.env.WA_TOKEN_UNIT;
 });
+
+test('validateTablePrefix: vacío y válidos pasan, inválidos lanzan error claro', async () => {
+  const { validateTablePrefix, buildTables } = await import('../src/tables.js');
+  assert.equal(validateTablePrefix(undefined), '');
+  assert.equal(validateTablePrefix(''), '');
+  assert.equal(validateTablePrefix('msg_'), 'msg_');
+  assert.equal(validateTablePrefix('a'.repeat(20)), 'a'.repeat(20));
+  for (const bad of ['Msg_', 'msg-', 'msg ', 'msg`', "m'; DROP", 'ñ_', 'a'.repeat(21)]) {
+    assert.throws(() => validateTablePrefix(bad), /DB_TABLE_PREFIX inválido/, bad);
+  }
+  assert.equal(buildTables('msg_').client_channel, '`msg_client_channel`');
+  assert.equal(buildTables('').message, '`message`');
+});
+
+test('findForeignTables: detecta tablas existentes que no son del mensajero', async () => {
+  const { findForeignTables, foreignTablesMessage, EXPECTED_COLUMNS } = await import('../scripts/migrate.js');
+  // nada existe, o existe completa (instalación propia): sin problemas
+  assert.deepEqual(findForeignTables({}, 'msg_'), []);
+  assert.deepEqual(findForeignTables({ msg_client: EXPECTED_COLUMNS.client, msg_message: [...EXPECTED_COLUMNS.message, 'channelId'] }, 'msg_'), []);
+  // tabla "client" de otro sistema
+  const problems = findForeignTables({ client: ['id', 'nombre', 'email'] }, '');
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].table, 'client');
+  assert.ok(problems[0].missing.includes('apiKeyHash'));
+  assert.match(foreignTablesMessage(problems), /no se tocó nada[\s\S]*client[\s\S]*DB_TABLE_PREFIX/);
+  // con prefijo, la tabla ajena sin prefijo no estorba
+  assert.deepEqual(findForeignTables({ client: ['id', 'nombre'] }, 'msg_'), []);
+});

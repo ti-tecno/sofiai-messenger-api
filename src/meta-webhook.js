@@ -6,6 +6,7 @@ import { getMessage, insertMessage, nextStatus, updateMessage } from './messages
 import { notifyClient } from './outbound-webhooks.js';
 import { channelByPhoneNumberId } from './channels.js';
 import { pickInboundOwner } from './inbound-owner.js';
+import { T } from './tables.js';
 
 const router = express.Router();
 
@@ -27,7 +28,7 @@ router.get('/', (req, res) => {
 });
 
 async function applyStatus(status) {
-  const [row] = await rows('SELECT * FROM message WHERE waMessageId = ? AND direction = \'out\'', [status.id]);
+  const [row] = await rows(`SELECT * FROM ${T.message} WHERE waMessageId = ? AND direction = 'out'`, [status.id]);
   if (!row) return;
   const updated = nextStatus(row.status, status.status);
   const changes = {};
@@ -47,10 +48,10 @@ async function applyStatus(status) {
 async function resolveInboundOwner(channel, phone, contextWaId) {
   let replied = null;
   if (contextWaId) {
-    [replied] = await rows('SELECT clientId, ref, metadata FROM message WHERE waMessageId = ? AND channelId = ?', [contextWaId, channel.id]);
+    [replied] = await rows(`SELECT clientId, ref, metadata FROM ${T.message} WHERE waMessageId = ? AND channelId = ?`, [contextWaId, channel.id]);
   }
   const [latestOut] = await rows(
-    "SELECT clientId, ref, metadata FROM message WHERE channelId = ? AND phone = ? AND direction = 'out' AND clientId IS NOT NULL ORDER BY createdAt DESC LIMIT 1",
+    `SELECT clientId, ref, metadata FROM ${T.message} WHERE channelId = ? AND phone = ? AND direction = 'out' AND clientId IS NOT NULL ORDER BY createdAt DESC LIMIT 1`,
     [channel.id, phone],
   );
   return pickInboundOwner({ replied, latestOut, channel });

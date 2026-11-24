@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { rows } from './db.js';
 import { ApiError } from './errors.js';
+import { T } from './tables.js';
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
@@ -19,7 +20,7 @@ export async function requireClient(req, _res, next) {
   try {
     const key = bearer(req);
     if (!key) throw new ApiError(401, 'UNAUTHORIZED', 'Falta la llave de API (Authorization: Bearer <llave>)');
-    const [client] = await rows('SELECT * FROM client WHERE apiKeyHash = ?', [hashKey(key)]);
+    const [client] = await rows(`SELECT * FROM ${T.client} WHERE apiKeyHash = ?`, [hashKey(key)]);
     if (!client) throw new ApiError(401, 'UNAUTHORIZED', 'Llave de API inválida');
     if (!client.active) throw new ApiError(403, 'CLIENT_DISABLED', 'Esta app cliente está desactivada');
     req.client = client;

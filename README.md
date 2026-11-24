@@ -17,4 +17,4 @@ curl -X POST https://HOST/v1/admin/clients -H "Authorization: Bearer $ADMIN_API_
 
 Pruebas: `npm test` (unitarias). La de integración corre con una BD vacía:
 `TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_USER=… TEST_DB_PASSWORD=… TEST_DB_NAME=msgtest npm test`
-— **borra** las tablas de esa BD: usa una de pruebas.
+— **borra** las tablas de esa BD: usa una de pruebas. Repite con `TEST_DB_TABLE_PREFIX=msg_` para probar con prefijo de tablas.

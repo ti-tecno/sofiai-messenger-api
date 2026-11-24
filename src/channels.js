@@ -1,5 +1,6 @@
 import { rows } from './db.js';
 import { ApiError } from './errors.js';
+import { T } from './tables.js';
 
 // Canales (números de WhatsApp). Pocos y casi estáticos: se guardan en memoria y se recargan
 // cuando se editan desde admin (un solo proceso; ver CLAUDE.md).
@@ -9,7 +10,7 @@ export function invalidateChannels() { cache = null; }
 
 export async function ensureChannels() {
   if (cache) return cache;
-  const list = await rows('SELECT * FROM channel ORDER BY id');
+  const list = await rows(`SELECT * FROM ${T.channel} ORDER BY id`);
   cache = {
     list,
     bySlug: new Map(list.map((c) => [c.slug, c])),
@@ -32,7 +33,7 @@ export const isChannelConfigured = (channel) => Boolean(channel && channel.activ
 // Canales que una app puede usar: [{ ...channel, isDefault }]
 export async function clientChannels(clientId) {
   const { byId } = await ensureChannels();
-  const links = await rows('SELECT channelId, isDefault FROM client_channel WHERE clientId = ?', [clientId]);
+  const links = await rows(`SELECT channelId, isDefault FROM ${T.client_channel} WHERE clientId = ?`, [clientId]);
   return links.filter((l) => byId.has(l.channelId)).map((l) => ({ ...byId.get(l.channelId), isDefault: Boolean(l.isDefault) }));
 }
 

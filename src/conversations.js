@@ -1,11 +1,12 @@
 import { rows } from './db.js';
 import { serviceWindowUntil } from './inbox.js';
 import { channelSlug } from './channels.js';
+import { T } from './tables.js';
 
 // Último mensaje recibido de ese teléfono por esta app en ese canal (la ventana de 24 h es por conversación).
 export async function lastInboundAt(clientId, channelId, phone) {
   const [row] = await rows(
-    "SELECT createdAt FROM message WHERE clientId = ? AND channelId = ? AND phone = ? AND direction = 'in' ORDER BY createdAt DESC LIMIT 1",
+    `SELECT createdAt FROM ${T.message} WHERE clientId = ? AND channelId = ? AND phone = ? AND direction = 'in' ORDER BY createdAt DESC LIMIT 1`,
     [clientId, channelId, phone],
   );
   return row?.createdAt ?? null;
@@ -26,7 +27,7 @@ export async function listConversations(clientId, refs, channelId) {
   if (channelId) { refSql += ' AND channelId = ?'; params.push(channelId); }
   const messages = await rows(
     `SELECT channelId, phone, direction, kind, template, body, status, ref, profileName, readAt, createdAt
-       FROM message WHERE clientId = ?${refSql} ORDER BY createdAt ASC LIMIT 5000`,
+       FROM ${T.message} WHERE clientId = ?${refSql} ORDER BY createdAt ASC LIMIT 5000`,
     params,
   );
   const byPhone = new Map();

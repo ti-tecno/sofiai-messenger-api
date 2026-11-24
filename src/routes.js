@@ -10,6 +10,7 @@ import {
 } from './channels.js';
 import { isRecipientAllowed, isSandbox } from './sandbox.js';
 import { parseTemplateMessage, parseTextMessage, listParam, dateParam, intParam } from './validate.js';
+import { T } from './tables.js';
 
 const router = express.Router();
 const MAX_BATCH = 100;
@@ -135,7 +136,7 @@ router.get('/messages', requireClient, wrap(async (req, res) => {
   const limit = intParam(q.limit, { name: 'limit', min: 1, max: 1000, fallback: 50 });
   const offset = intParam(q.offset, { name: 'offset', min: 0, max: 1e9, fallback: 0 });
   const data = await rows(
-    `SELECT * FROM message WHERE ${where.join(' AND ')} ORDER BY createdAt DESC, id LIMIT ? OFFSET ?`,
+    `SELECT * FROM ${T.message} WHERE ${where.join(' AND ')} ORDER BY createdAt DESC, id LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
   res.json({ data: data.map(toApi), limit, offset });
@@ -162,7 +163,7 @@ router.get('/conversations/unread', requireClient, wrap(async (req, res) => {
   let refSql = '';
   if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
   if (req.query.channel !== undefined) { refSql += ' AND channelId = ?'; params.push(await channelFilter(req.query.channel)); }
-  const [{ total }] = await rows(`SELECT COUNT(*) AS total FROM message WHERE clientId = ? AND direction = 'in' AND readAt IS NULL${refSql}`, params);
+  const [{ total }] = await rows(`SELECT COUNT(*) AS total FROM ${T.message} WHERE clientId = ? AND direction = 'in' AND readAt IS NULL${refSql}`, params);
   res.json({ unread: Number(total) });
 }));
 
@@ -182,8 +183,8 @@ router.get('/conversations/:phone', requireClient, wrap(async (req, res) => {
   let chSql = '';
   const chParams = [];
   if (req.query.channel !== undefined) { chSql = ' AND channelId = ?'; chParams.push(await channelFilter(req.query.channel)); }
-  const thread = await rows(`SELECT * FROM message WHERE clientId = ? AND phone = ?${refSql}${chSql} ORDER BY createdAt ASC LIMIT 1000`, [...params, ...chParams]);
-  const [last] = await rows(`SELECT MAX(createdAt) AS at FROM message WHERE clientId = ? AND phone = ? AND direction = 'in'${chSql}`, [req.client.id, phone, ...chParams]);
+  const thread = await rows(`SELECT * FROM ${T.message} WHERE clientId = ? AND phone = ?${refSql}${chSql} ORDER BY createdAt ASC LIMIT 1000`, [...params, ...chParams]);
+  const [last] = await rows(`SELECT MAX(createdAt) AS at FROM ${T.message} WHERE clientId = ? AND phone = ? AND direction = 'in'${chSql}`, [req.client.id, phone, ...chParams]);
   res.json({
     phone,
     profileName: [...thread].reverse().find((m) => m.profileName)?.profileName ?? null,
@@ -201,7 +202,7 @@ router.post('/conversations/:phone/read', requireClient, wrap(async (req, res) =
   if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
   if (req.body?.channel !== undefined) { refSql += ' AND channelId = ?'; params.push(await channelFilter(req.body.channel)); }
   const [result] = await pool.query(
-    `UPDATE message SET readAt = ? WHERE clientId = ? AND phone = ? AND direction = 'in' AND readAt IS NULL${refSql}`,
+    `UPDATE ${T.message} SET readAt = ? WHERE clientId = ? AND phone = ? AND direction = 'in' AND readAt IS NULL${refSql}`,
     params,
   );
   res.json({ updated: result.affectedRows });
@@ -254,21 +255,21 @@ router.post('/admin/clients', requireAdmin, wrap(async (req, res) => {
   const webhookSecret = newWebhookSecret();
   const now = new Date();
   const [result] = await pool.query(
-    'INSERT INTO client (name, apiKeyHash, webhookUrl, webhookSecret, dailyLimit, active, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?)',
+    `INSERT INTO ${T.client} (name, apiKeyHash, webhookUrl, webhookSecret, dailyLimit, active, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?)`,
     [fields.name, hashKey(apiKey), fields.webhookUrl ?? null, webhookSecret, fields.dailyLimit ?? null, fields.active ?? 1, now, now],
   );
-  const [client] = await rows('SELECT * FROM client WHERE id = ?', [result.insertId]);
+  const [client] = await rows(`SELECT * FROM ${T.client} WHERE id = ?`, [result.insertId]);
   res.status(201).json({ client: publicClient(client), apiKey, webhookSecret });
 }));
 
 router.get('/admin/clients', requireAdmin, wrap(async (_req, res) => {
-  res.json({ data: (await rows('SELECT * FROM client ORDER BY id')).map(publicClient) });
+  res.json({ data: (await rows(`SELECT * FROM ${T.client} ORDER BY id`)).map(publicClient) });
 }));
 
 // PATCH /v1/admin/clients/:id — { name?, webhookUrl?, dailyLimit?, active?, rotateKey?, rotateWebhookSecret? }
 router.patch('/admin/clients/:id', requireAdmin, wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const [existing] = await rows('SELECT * FROM client WHERE id = ?', [id]);
+  const [existing] = await rows(`SELECT * FROM ${T.client} WHERE id = ?`, [id]);
   if (!existing) throw new ApiError(404, 'NOT_FOUND', 'App cliente no encontrada');
 
   const fields = clientFields(req.body ?? {}, { creating: false });
@@ -278,8 +279,8 @@ router.patch('/admin/clients/:id', requireAdmin, wrap(async (req, res) => {
   if (!Object.keys(fields).length) throw new ApiError(400, 'VALIDATION', 'No se indicó nada que cambiar');
 
   fields.updatedAt = new Date();
-  await pool.query(`UPDATE client SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(fields), id]);
-  const [client] = await rows('SELECT * FROM client WHERE id = ?', [id]);
+  await pool.query(`UPDATE ${T.client} SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(fields), id]);
+  const [client] = await rows(`SELECT * FROM ${T.client} WHERE id = ?`, [id]);
   res.json({ client: publicClient(client), ...secrets });
 }));
 
@@ -335,7 +336,7 @@ function channelFields(body, { creating }) {
 
 async function assertClientExists(id) {
   if (id == null) return;
-  const [c] = await rows('SELECT id FROM client WHERE id = ?', [id]);
+  const [c] = await rows(`SELECT id FROM ${T.client} WHERE id = ?`, [id]);
   if (!c) throw new ApiError(400, 'VALIDATION', `defaultClientId ${id}: la app no existe`);
 }
 
@@ -351,34 +352,34 @@ router.post('/admin/channels', requireAdmin, wrap(async (req, res) => {
   const now = new Date();
   const row = { type: 'whatsapp', active: 1, createdAt: now, updatedAt: now, ...f };
   const keys = Object.keys(row);
-  const [result] = await pool.query(`INSERT INTO channel (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => row[k])).catch(duplicateAs409);
+  const [result] = await pool.query(`INSERT INTO ${T.channel} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => row[k])).catch(duplicateAs409);
   invalidateChannels();
-  const [channel] = await rows('SELECT * FROM channel WHERE id = ?', [result.insertId]);
+  const [channel] = await rows(`SELECT * FROM ${T.channel} WHERE id = ?`, [result.insertId]);
   res.status(201).json({ channel: publicChannel(channel) });
 }));
 
 router.get('/admin/channels', requireAdmin, wrap(async (_req, res) => {
-  res.json({ data: (await rows('SELECT * FROM channel ORDER BY id')).map(publicChannel) });
+  res.json({ data: (await rows(`SELECT * FROM ${T.channel} ORDER BY id`)).map(publicChannel) });
 }));
 
 // PATCH /v1/admin/channels/:slug
 router.patch('/admin/channels/:slug', requireAdmin, wrap(async (req, res) => {
-  const [existing] = await rows('SELECT * FROM channel WHERE slug = ?', [req.params.slug]);
+  const [existing] = await rows(`SELECT * FROM ${T.channel} WHERE slug = ?`, [req.params.slug]);
   if (!existing) throw new ApiError(404, 'NOT_FOUND', 'Canal no encontrado');
   const f = channelFields(req.body ?? {}, { creating: false });
   if (!Object.keys(f).length) throw new ApiError(400, 'VALIDATION', 'No se indicó nada que cambiar');
   await assertClientExists(f.defaultClientId);
   f.updatedAt = new Date();
-  await pool.query(`UPDATE channel SET ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(f), existing.id]).catch(duplicateAs409);
+  await pool.query(`UPDATE ${T.channel} SET ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(f), existing.id]).catch(duplicateAs409);
   invalidateChannels();
-  const [channel] = await rows('SELECT * FROM channel WHERE id = ?', [existing.id]);
+  const [channel] = await rows(`SELECT * FROM ${T.channel} WHERE id = ?`, [existing.id]);
   res.json({ channel: publicChannel(channel) });
 }));
 
 // PUT /v1/admin/clients/:id/channels — { channels: [{ slug, isDefault }] } reemplaza las asignaciones de la app
 router.put('/admin/clients/:id/channels', requireAdmin, wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const [client] = await rows('SELECT id FROM client WHERE id = ?', [id]);
+  const [client] = await rows(`SELECT id FROM ${T.client} WHERE id = ?`, [id]);
   if (!client) throw new ApiError(404, 'NOT_FOUND', 'App cliente no encontrada');
   const list = req.body?.channels;
   if (!Array.isArray(list)) throw new ApiError(400, 'VALIDATION', 'channels debe ser una lista [{ slug, isDefault }]');
@@ -398,8 +399,8 @@ router.put('/admin/clients/:id/channels', requireAdmin, wrap(async (req, res) =>
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    await conn.query('DELETE FROM client_channel WHERE clientId = ?', [id]);
-    for (const l of links) await conn.query('INSERT INTO client_channel (clientId, channelId, isDefault) VALUES (?,?,?)', [id, l.channelId, l.isDefault ? 1 : 0]);
+    await conn.query(`DELETE FROM ${T.client_channel} WHERE clientId = ?`, [id]);
+    for (const l of links) await conn.query(`INSERT INTO ${T.client_channel} (clientId, channelId, isDefault) VALUES (?,?,?)`, [id, l.channelId, l.isDefault ? 1 : 0]);
     await conn.commit();
   } catch (err) {
     await conn.rollback();

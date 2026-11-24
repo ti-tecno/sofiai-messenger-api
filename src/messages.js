@@ -4,6 +4,7 @@ import { sendTemplate, sendText, normalizePhone, WhatsAppError } from './whatsap
 import { describeWhatsAppError } from './inbox.js';
 import { channelSlug, tokenFor } from './channels.js';
 import { isRecipientAllowed } from './sandbox.js';
+import { T } from './tables.js';
 
 // ~20 msg/s, muy por debajo de los 80 msg/s por número de la Cloud API.
 export const SEND_PAUSE_MS = 50;
@@ -43,23 +44,23 @@ export function toApi(r) {
 
 export async function updateMessage(id, fields) {
   const entries = Object.entries({ ...fields, updatedAt: new Date() });
-  await pool.query(`UPDATE message SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`, [...entries.map(([, v]) => v), id]);
+  await pool.query(`UPDATE ${T.message} SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`, [...entries.map(([, v]) => v), id]);
 }
 
 export async function insertMessage(r) {
   const now = new Date();
   const row = { createdAt: now, updatedAt: now, ...r };
   const keys = Object.keys(row);
-  await pool.query(`INSERT INTO message (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`, keys.map((k) => row[k]));
+  await pool.query(`INSERT INTO ${T.message} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`, keys.map((k) => row[k]));
   return row;
 }
 
-export const getMessage = async (id) => (await rows('SELECT * FROM message WHERE id = ?', [id]))[0] ?? null;
+export const getMessage = async (id) => (await rows(`SELECT * FROM ${T.message} WHERE id = ?`, [id]))[0] ?? null;
 
 async function dailyLimitReached(client) {
   if (!client.dailyLimit) return false;
   const [{ total }] = await rows(
-    `SELECT COUNT(*) AS total FROM message
+    `SELECT COUNT(*) AS total FROM ${T.message}
       WHERE clientId = ? AND direction = 'out' AND status <> 'failed' AND createdAt >= ?`,
     [client.id, new Date(Date.now() - 24 * 3600000)],
   );
@@ -79,7 +80,7 @@ export async function sendMessage(client, channel, { kind, to, template, languag
 
   // Repetir una petición ya hecha devuelve el mismo mensaje, incluso con el límite diario agotado.
   if (idempotencyKey) {
-    const [existing] = await rows('SELECT * FROM message WHERE clientId = ? AND idempotencyKey = ?', [client.id, idempotencyKey]);
+    const [existing] = await rows(`SELECT * FROM ${T.message} WHERE clientId = ? AND idempotencyKey = ?`, [client.id, idempotencyKey]);
     if (existing) return { status: 'duplicate', message: existing };
   }
   if (await dailyLimitReached(client)) return { status: 'skipped', reason: 'daily_limit', fatal: true };
@@ -103,7 +104,7 @@ export async function sendMessage(client, channel, { kind, to, template, languag
     });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY' && idempotencyKey) {
-      const [existing] = await rows('SELECT * FROM message WHERE clientId = ? AND idempotencyKey = ?', [client.id, idempotencyKey]);
+      const [existing] = await rows(`SELECT * FROM ${T.message} WHERE clientId = ? AND idempotencyKey = ?`, [client.id, idempotencyKey]);
       if (existing) return { status: 'duplicate', message: existing };
     }
     throw err;
