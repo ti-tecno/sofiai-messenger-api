@@ -1,4 +1,4 @@
-import { rows } from './db.js';
+import { rows, pool } from './db.js';
 import { serviceWindowUntil } from './inbox.js';
 import { channelSlug } from './channels.js';
 import { T } from './tables.js';
@@ -48,4 +48,36 @@ export async function listConversations(clientId, refs, channelId) {
     .filter((c) => c.lastInboundAt)
     .map((c) => ({ ...c, windowUntil: serviceWindowUntil(c.lastInboundAt) }))
     .sort((a, b) => new Date(b.last.at) - new Date(a.last.at));
+}
+
+// Hilo completo de un teléfono para una app (plantillas y texto, entrantes y salientes), el más
+// viejo primero. `refs` y `channelId` opcionales. Devuelve filas crudas (usar toApi para la API).
+export async function getThread(clientId, phone, refs, channelId) {
+  const params = [clientId, phone];
+  let refSql = '';
+  if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
+  let chSql = '';
+  const chParams = [];
+  if (channelId !== undefined) { chSql = ' AND channelId = ?'; chParams.push(channelId); }
+  const thread = await rows(`SELECT * FROM ${T.message} WHERE clientId = ? AND phone = ?${refSql}${chSql} ORDER BY createdAt ASC LIMIT 1000`, [...params, ...chParams]);
+  const [last] = await rows(`SELECT MAX(createdAt) AS at FROM ${T.message} WHERE clientId = ? AND phone = ? AND direction = 'in'${chSql}`, [clientId, phone, ...chParams]);
+  return {
+    phone,
+    profileName: [...thread].reverse().find((m) => m.profileName)?.profileName ?? null,
+    windowUntil: serviceWindowUntil(last?.at ?? null),
+    rows: thread,
+  };
+}
+
+// Marca como leídos los entrantes de un teléfono para una app. Devuelve cuántos cambiaron.
+export async function markRead(clientId, phone, refs, channelId) {
+  const params = [new Date(), clientId, phone];
+  let refSql = '';
+  if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
+  if (channelId !== undefined) { refSql += ' AND channelId = ?'; params.push(channelId); }
+  const [result] = await pool.query(
+    `UPDATE ${T.message} SET readAt = ? WHERE clientId = ? AND phone = ? AND direction = 'in' AND readAt IS NULL${refSql}`,
+    params,
+  );
+  return result.affectedRows;
 }

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SofIA Messenger · Backoffice</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">SofIA Messenger <span>Backoffice</span></div>
+    <nav id="nav" hidden>
+      <a href="#resumen">Resumen</a>
+      <a href="#eventos">Por evento</a>
+      <a href="#mensajes">Mensajes</a>
+      <a href="#conversaciones">Conversaciones</a>
+      <a href="#enviar">Enviar</a>
+    </nav>
+    <div class="top-right">
+      <span id="sandbox" class="badge warn" hidden></span>
+      <button id="logout" class="link" hidden>Salir</button>
+    </div>
+  </header>
+  <main id="main"></main>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
