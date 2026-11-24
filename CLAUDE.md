@@ -6,6 +6,7 @@ Servicio de mensajería WhatsApp (Cloud API de Meta) de SofIA, compartido por cu
 - `npm ci` instala dependencias (Node >= 20.6, ESM, Express, mysql2).
 - `npm run migrate` crea/actualiza tablas (repetible). Requiere `.env`.
 - `npm run dev` arranca con `--watch`; `npm start` en producción (pm2: `pm2 start server.js --name sofiai-messenger`, un solo proceso, nunca cluster ni `pm2 restart all`).
+- Desplegar (VPS, pm2 `sofiai-messenger`, código desde GitHub, secretos en `/root/secrets/sofiai-messenger-api/.env`): `tr -d '\r' < deploy/deploy.sh | ssh root@<servidor> 'BRANCH=develop bash -s'`. La primera vez clona y crea el `.env` desde `.env.example` para llenarlo.
 - `npm test` corre `node --test`. La prueba de integración solo corre con `TEST_DB_HOST/PORT/USER/PASSWORD/NAME`; **borra las tablas** de esa BD, usar una exclusiva de pruebas.
 
 ## Estructura
