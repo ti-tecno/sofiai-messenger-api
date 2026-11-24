@@ -196,6 +196,33 @@ Responde **2xx** rápido. Se reintenta 3 veces (de inmediato, a 1 s y a 5 s) ant
 
 `dailyLimit` cuenta los mensajes salientes **no fallidos** de las últimas 24 h: es un tope de gasto si una app se descontrola o se filtra su llave. `null` = sin límite.
 
+### 8.1 Backoffice (`/admin` y `/v1/admin/console`)
+
+Página web para operar el mensajero: **`/admin`** (HTML+JS sin dependencias, servido por el propio proceso). Pide la `ADMIN_API_KEY`, que se guarda solo en la pestaña (`sessionStorage`). Tiene cinco vistas:
+- **Resumen**: totales del periodo, por app (enviados, fallidos, recibidos, sin leer, uso de 24 h contra `dailyLimit`) y por canal, más el aviso de sandbox.
+- **Por evento**: actividad agrupada por app y `ref` (en Eventopolis, `event:<id>`). El nombre visible sale de `metadata.refLabel` del mensaje más reciente con esa ref: las apps que quieran verlo deben mandarlo.
+- **Mensajes**: todos los mensajes con filtros (app, sin app, ref, dirección, estado, teléfono, periodo) y el motivo de cada falla.
+- **Conversaciones**: lo que contestan las personas a cada app. Permite marcar como leído y responder con texto libre **solo dentro de la ventana de 24 h**.
+- **Enviar**: plantilla aprobada (se lee de Meta) a uno o varios teléfonos en nombre de una app, con vista previa, costo aproximado y lotes de 100 con `idempotencyKey` (un doble clic no duplica).
+
+Los envíos del backoffice usan **las mismas reglas que la API de la app**: su canal, su `dailyLimit`, `SEND_ALLOWLIST` y la ventana de 24 h. Una app con `active: false` no puede enviar (**403** `CLIENT_DISABLED`). Quedan marcados con `metadata.origin = "backoffice"` y se ven en el mensajero, pero **la app no los tiene en su propio historial** (sí recibe los webhooks de estado y las respuestas).
+
+Acceso: el mensajero escucha en `127.0.0.1`, así que el backoffice no se publica a internet. Se entra con un túnel SSH:
+```bash
+ssh -N -L 5180:127.0.0.1:5100 <alias-del-servidor>   # deja la terminal abierta
+# y en el navegador: http://localhost:5180/admin
+```
+La página manda cabeceras CSP estrictas (`default-src 'self'`, sin `frame-ancestors`), `no-store` y `no-referrer`.
+
+Rutas de datos (todas con `Authorization: Bearer <ADMIN_API_KEY>`; las fechas en ISO; `since`/`until` por defecto = últimos 30 días):
+- `GET /v1/admin/console/clients` → apps con sus canales (`configured` = el canal tiene token).
+- `GET /v1/admin/console/summary?since&until` → `{ totals, clients[], channels[], unassigned, sandbox }`.
+- `GET /v1/admin/console/refs?client&since&until` → `{ data: [{ clientId, clientName, ref, label, outTotal, failed, delivered, read, inbound, unread, phones, firstAt, lastAt }] }`.
+- `GET /v1/admin/console/messages?client=<id|none>&ref&channel&phone&direction&kind&template&status&since&until&limit(≤500)&offset` → `{ data, total }` (cada mensaje con `clientName`).
+- `GET /v1/admin/console/clients/:id/conversations[?ref&channel]` · `GET …/conversations/:phone` · `POST …/conversations/:phone/read`: lo mismo que §6, pero para la app indicada.
+- `POST /v1/admin/console/clients/:id/messages/template` · `…/template/batch` · `…/text`: mismo cuerpo y respuestas que §4.
+- `GET /v1/admin/console/channels/:slug/templates[?all=true]` → plantillas del WABA del canal (por defecto solo `APPROVED`), con `params` (variables con nombre), `urlButton`, `needsHeaderImage` y `sendable`. Desde el backoffice no se pueden llenar las variables numeradas (`{{1}}`) del cuerpo ni los encabezados de video o documento. Si Meta falla: **502** `META_ERROR`.
+
 ## 9. Otras rutas
 
 - `GET /health` → `{ "status": "ok" }` (503 `db_error` si la BD no responde). Sin autenticación.

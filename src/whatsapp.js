@@ -121,3 +121,22 @@ export async function sendText({ channel, to, text, previewUrl = true }) {
 export async function createTemplate(wabaId, definition, token) {
   return graphRequest(`${wabaId}/message_templates`, definition, token);
 }
+
+// Plantillas de la cuenta (WABA) con su estado y componentes (backoffice: elegir y llenar una plantilla).
+export async function listTemplates(wabaId, token) {
+  if (!token) throw new WhatsAppError('WhatsApp no está configurado en el servidor', { status: 503 });
+  const version = process.env.WHATSAPP_API_VERSION || DEFAULT_API_VERSION;
+  const url = `https://graph.facebook.com/${version}/${wabaId}/message_templates?fields=name,status,language,category,parameter_format,components&limit=200`;
+  let response;
+  try {
+    response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+  } catch (err) {
+    throw new WhatsAppError(`No se pudo contactar a WhatsApp: ${err.message}`, { retryable: true });
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    const e = data.error || {};
+    throw new WhatsAppError(e.message || `Error HTTP ${response.status}`, { status: response.status, code: e.code, details: e });
+  }
+  return Array.isArray(data.data) ? data.data : [];
+}

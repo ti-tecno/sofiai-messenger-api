@@ -18,3 +18,5 @@ curl -X POST https://HOST/v1/admin/clients -H "Authorization: Bearer $ADMIN_API_
 Pruebas: `npm test` (unitarias). La de integración corre con una BD vacía:
 `TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_USER=… TEST_DB_PASSWORD=… TEST_DB_NAME=msgtest npm test`
 — **borra** las tablas de esa BD: usa una de pruebas. Repite con `TEST_DB_TABLE_PREFIX=msg_` para probar con prefijo de tablas.
+
+Backoffice (ver mensajes por app y por evento, conversaciones y enviar plantillas a nombre de una app): `http://HOST:PUERTO/admin`, con la `ADMIN_API_KEY`. En el servidor no se expone a internet: se entra con un túnel SSH (`ssh -N -L 5180:127.0.0.1:5100 <alias-del-servidor>` y luego `http://localhost:5180/admin`). Detalles en [docs/SPEC.md §8.1](docs/SPEC.md).
