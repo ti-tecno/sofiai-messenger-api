@@ -4,6 +4,9 @@ import { rows } from './db.js';
 import { parseInboundMessage } from './inbox.js';
 import { getMessage, insertMessage, nextStatus, updateMessage } from './messages.js';
 import { notifyClient } from './outbound-webhooks.js';
+import { channelByPhoneNumberId } from './channels.js';
+import { pickInboundOwner } from './inbound-owner.js';
+import { T } from './tables.js';
 
 const router = express.Router();
 
@@ -25,7 +28,7 @@ router.get('/', (req, res) => {
 });
 
 async function applyStatus(status) {
-  const [row] = await rows('SELECT * FROM message WHERE waMessageId = ? AND direction = \'out\'', [status.id]);
+  const [row] = await rows(`SELECT * FROM ${T.message} WHERE waMessageId = ? AND direction = 'out'`, [status.id]);
   if (!row) return;
   const updated = nextStatus(row.status, status.status);
   const changes = {};
@@ -40,29 +43,28 @@ async function applyStatus(status) {
   await notifyClient(row.clientId, 'message.status', await getMessage(row.id));
 }
 
-// A qué app cliente (y ref/metadata) pertenece un mensaje entrante:
-//   1. el mensaje al que contestó (context.id): exacto;
-//   2. el último mensaje que se le mandó a ese teléfono.
-// Sin coincidencia queda sin dueño (clientId null) y nadie lo recibe.
-async function resolveInboundOwner(phone, contextWaId) {
+// A qué app cliente (y ref/metadata) pertenece un mensaje entrante, dentro del canal que lo recibió
+// (ver pickInboundOwner para las reglas).
+async function resolveInboundOwner(channel, phone, contextWaId) {
+  let replied = null;
   if (contextWaId) {
-    const [sent] = await rows('SELECT clientId, ref, metadata FROM message WHERE waMessageId = ?', [contextWaId]);
-    if (sent?.clientId) return sent;
+    [replied] = await rows(`SELECT clientId, ref, metadata FROM ${T.message} WHERE waMessageId = ? AND channelId = ?`, [contextWaId, channel.id]);
   }
-  const [latest] = await rows(
-    "SELECT clientId, ref, metadata FROM message WHERE phone = ? AND direction = 'out' AND clientId IS NOT NULL ORDER BY createdAt DESC LIMIT 1",
-    [phone],
+  const [latestOut] = await rows(
+    `SELECT clientId, ref, metadata FROM ${T.message} WHERE channelId = ? AND phone = ? AND direction = 'out' AND clientId IS NOT NULL ORDER BY createdAt DESC LIMIT 1`,
+    [channel.id, phone],
   );
-  return latest ?? { clientId: null, ref: null, metadata: null };
+  return pickInboundOwner({ replied, latestOut, channel });
 }
 
-async function storeInbound(parsed) {
-  const owner = await resolveInboundOwner(parsed.phone, parsed.contextWaId);
+async function storeInbound(channel, parsed) {
+  const owner = await resolveInboundOwner(channel, parsed.phone, parsed.contextWaId);
   const id = crypto.randomUUID();
   try {
     await insertMessage({
       id,
       clientId: owner.clientId,
+      channelId: channel.id,
       direction: 'in',
       kind: 'text',
       phone: parsed.phone,
@@ -98,10 +100,16 @@ router.post('/', (req, res) => {
       for (const change of entry.changes || []) {
         if (change.field !== 'messages') continue;
         const value = change.value || {};
+        // El canal se identifica por el número que recibió el evento; si no es nuestro, se ignora.
+        const channel = await channelByPhoneNumberId(value.metadata?.phone_number_id);
+        if (!channel) {
+          console.log(`[whatsapp] evento ignorado: phone_number_id desconocido (${value.metadata?.phone_number_id ?? 'ausente'})`);
+          continue;
+        }
         for (const status of value.statuses || []) await applyStatus(status);
         for (const message of value.messages || []) {
           const parsed = parseInboundMessage(message, value.contacts || []);
-          if (parsed) await storeInbound(parsed);
+          if (parsed) await storeInbound(channel, parsed);
         }
       }
     }

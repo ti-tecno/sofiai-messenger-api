@@ -10,11 +10,11 @@ function optString(body, key, max) {
   return v;
 }
 
-// Campos comunes a cualquier mensaje: to, ref, metadata, idempotencyKey.
+// Campos comunes a cualquier mensaje: to, channel (slug, opcional), ref, metadata, idempotencyKey.
 function common(body) {
   if (!isObject(body)) throw bad('El cuerpo debe ser un objeto JSON');
   if (typeof body.to !== 'string' && typeof body.to !== 'number') throw bad('to (teléfono) es requerido');
-  const out = { to: String(body.to), ref: optString(body, 'ref', 100), idempotencyKey: optString(body, 'idempotencyKey', 100) };
+  const out = { to: String(body.to), channel: optString(body, 'channel', 50), ref: optString(body, 'ref', 100), idempotencyKey: optString(body, 'idempotencyKey', 100) };
   if (body.metadata !== undefined && body.metadata !== null) {
     if (!isObject(body.metadata) || JSON.stringify(body.metadata).length > 4096) throw bad('metadata debe ser un objeto JSON de máximo 4 KB');
     out.metadata = body.metadata;

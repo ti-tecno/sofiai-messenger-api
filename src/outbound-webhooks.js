@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { rows } from './db.js';
 import { toApi } from './messages.js';
+import { ensureChannels } from './channels.js';
+import { T } from './tables.js';
 
 export function signBody(secret, body) {
   return `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
@@ -36,8 +38,9 @@ async function post(client, payload) {
 // mensaje suyo y 'message.received' cuando alguien le contesta.
 export async function notifyClient(clientId, event, messageRow) {
   if (!clientId) return;
-  const [client] = await rows('SELECT id, name, webhookUrl, webhookSecret FROM client WHERE id = ? AND active = 1', [clientId]);
+  const [client] = await rows(`SELECT id, name, webhookUrl, webhookSecret FROM ${T.client} WHERE id = ? AND active = 1`, [clientId]);
   if (!client?.webhookUrl || !client.webhookSecret) return;
+  await ensureChannels();
   post(client, { event, createdAt: new Date().toISOString(), data: toApi(messageRow) })
     .catch((err) => console.error('[webhook] error:', err));
 }
