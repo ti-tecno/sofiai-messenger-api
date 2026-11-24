@@ -18,10 +18,6 @@ export class WhatsAppError extends Error {
 // Códigos de Meta que vale la pena reintentar (límite de velocidad / fallas temporales).
 const RETRYABLE_CODES = new Set([1, 2, 4, 80007, 130429, 131000, 131016, 131048, 131056, 133004]);
 
-export function isWhatsAppConfigured() {
-  return Boolean(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
-}
-
 // "+52 (55) 1234-5678", "5512345678", "044 55 1234 5678", "521..." → "525512345678" (E.164 sin "+").
 // null si no puede ser un destinatario válido.
 export function normalizePhone(raw, defaultCountry = process.env.WHATSAPP_DEFAULT_COUNTRY || '52') {
@@ -41,8 +37,9 @@ export function normalizePhone(raw, defaultCountry = process.env.WHATSAPP_DEFAUL
   return digits;
 }
 
-async function graphRequest(path, body) {
-  if (!isWhatsAppConfigured()) {
+// `token` es el del canal (src/channels.js tokenFor).
+async function graphRequest(path, body, token) {
+  if (!token) {
     throw new WhatsAppError('WhatsApp no está configurado en el servidor', { status: 503 });
   }
   const version = process.env.WHATSAPP_API_VERSION || DEFAULT_API_VERSION;
@@ -51,7 +48,7 @@ async function graphRequest(path, body) {
   try {
     response = await fetch(`https://graph.facebook.com/${version}/${path}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15000),
     });
@@ -73,8 +70,9 @@ async function graphRequest(path, body) {
   return data;
 }
 
+// `channel` = { phoneNumberId, token }: el número desde el que se envía.
 // Plantilla aprobada. `parameters` = { body: {nombre: valor}, buttonUrlSuffix?, headerImageUrl? }.
-export async function sendTemplate({ to, template, language = 'es_MX', parameters = {} }) {
+export async function sendTemplate({ channel, to, template, language = 'es_MX', parameters = {} }) {
   const components = [];
 
   if (parameters.headerImageUrl) {
@@ -98,28 +96,28 @@ export async function sendTemplate({ to, template, language = 'es_MX', parameter
     components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: parameters.buttonUrlSuffix }] });
   }
 
-  const data = await graphRequest(`${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const data = await graphRequest(`${channel.phoneNumberId}/messages`, {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to,
     type: 'template',
     template: { name: template, language: { code: language }, components },
-  });
+  }, channel.token);
   return { messageId: data.messages?.[0]?.id ?? null };
 }
 
 // Texto libre: solo llega si el destinatario escribió en las últimas 24 h (error 131047 si no).
-export async function sendText({ to, text, previewUrl = true }) {
-  const data = await graphRequest(`${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+export async function sendText({ channel, to, text, previewUrl = true }) {
+  const data = await graphRequest(`${channel.phoneNumberId}/messages`, {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to,
     type: 'text',
     text: { body: text, preview_url: previewUrl },
-  });
+  }, channel.token);
   return { messageId: data.messages?.[0]?.id ?? null };
 }
 
-export async function createTemplate(wabaId, definition) {
-  return graphRequest(`${wabaId}/message_templates`, definition);
+export async function createTemplate(wabaId, definition, token) {
+  return graphRequest(`${wabaId}/message_templates`, definition, token);
 }

@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import { rows, parseJson, pool } from './db.js';
 import { sendTemplate, sendText, normalizePhone, WhatsAppError } from './whatsapp.js';
 import { describeWhatsAppError } from './inbox.js';
+import { channelSlug, tokenFor } from './channels.js';
+import { isRecipientAllowed } from './sandbox.js';
 
 // ~20 msg/s, muy por debajo de los 80 msg/s por número de la Cloud API.
 export const SEND_PAUSE_MS = 50;
@@ -17,6 +19,7 @@ export function toApi(r) {
     id: r.id,
     direction: r.direction,
     kind: r.kind,
+    channel: channelSlug(r.channelId),
     phone: r.phone,
     template: r.template ?? null,
     parameters: parseJson(r.params),
@@ -25,6 +28,8 @@ export function toApi(r) {
     metadata: parseJson(r.metadata),
     idempotencyKey: r.idempotencyKey ?? null,
     status: r.status,
+    waMessageId: r.waMessageId ?? null,
+    contextWaId: r.contextWaId ?? null,
     error: r.status === 'failed'
       ? { code: r.errorCode, message: r.errorMessage, ...describeWhatsAppError(r.errorCode, r.errorMessage) }
       : null,
@@ -63,12 +68,14 @@ async function dailyLimitReached(client) {
 
 // Envía un mensaje (kind 'template' | 'text') en nombre de `client`. Nunca lanza por problemas
 // del destinatario; devuelve { status, message?, reason?, fatal? }:
-//   sent · duplicate (misma idempotencyKey) · failed · skipped (reason: invalid_phone | daily_limit)
+//   sent · duplicate (misma idempotencyKey) · failed · skipped (reason: invalid_phone | not_allowed | daily_limit)
 // Se guarda el renglón ANTES de llamar a Meta: la llave única de idempotencia hace que reintentar
 // la misma petición (incluso desde otro proceso) nunca mande dos veces el mismo mensaje.
-export async function sendMessage(client, { kind, to, template, language, parameters, text, ref, metadata, idempotencyKey }) {
+export async function sendMessage(client, channel, { kind, to, template, language, parameters, text, ref, metadata, idempotencyKey }) {
   const phone = normalizePhone(to);
   if (!phone) return { status: 'skipped', reason: 'invalid_phone' };
+  // Modo sandbox (SEND_ALLOWLIST): se rechaza ANTES de guardar o llamar a Meta.
+  if (!isRecipientAllowed(phone)) return { status: 'skipped', reason: 'not_allowed' };
 
   // Repetir una petición ya hecha devuelve el mismo mensaje, incluso con el límite diario agotado.
   if (idempotencyKey) {
@@ -82,6 +89,7 @@ export async function sendMessage(client, { kind, to, template, language, parame
     await insertMessage({
       id,
       clientId: client.id,
+      channelId: channel.id,
       direction: 'out',
       kind,
       phone,
@@ -101,10 +109,11 @@ export async function sendMessage(client, { kind, to, template, language, parame
     throw err;
   }
 
+  const waChannel = { phoneNumberId: channel.phoneNumberId, token: tokenFor(channel) };
   try {
     const { messageId } = kind === 'template'
-      ? await sendTemplate({ to: phone, template, language, parameters })
-      : await sendText({ to: phone, text });
+      ? await sendTemplate({ channel: waChannel, to: phone, template, language, parameters })
+      : await sendText({ channel: waChannel, to: phone, text });
     await updateMessage(id, { status: 'sent', waMessageId: messageId });
     return { status: 'sent', message: await getMessage(id) };
   } catch (err) {
