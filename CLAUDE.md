@@ -10,13 +10,14 @@ Servicio de mensajería WhatsApp (Cloud API de Meta) de SofIA, compartido por cu
 
 ## Estructura
 - `server.js`: escucha (http/https). `src/app.js`: crea y exporta `app` (lo importan las pruebas).
-- `src/routes.js` (API `/v1`), `src/meta-webhook.js` (entrantes y estados de Meta), `src/outbound-webhooks.js` (avisos a las apps), `src/messages.js` (envío e idempotencia), `src/whatsapp.js` (cliente de Meta), `src/conversations.js`, `src/inbox.js`, `src/validate.js`, `src/auth.js`, `src/db.js`, `src/errors.js`.
-- `scripts/migrate.js`: tablas. `docs/`: SPEC y colección Postman. `test/`: pruebas.
+- `src/routes.js` (API `/v1`), `src/meta-webhook.js` (entrantes y estados de Meta), `src/outbound-webhooks.js` (avisos a las apps), `src/messages.js` (envío e idempotencia), `src/whatsapp.js` (cliente de Meta), `src/channels.js` (canales: caché, token por `tokenEnv`, `resolveSendChannel`), `src/inbound-owner.js` (a qué app va un entrante, función pura), `src/sandbox.js` (`SEND_ALLOWLIST`), `src/conversations.js`, `src/inbox.js`, `src/validate.js`, `src/auth.js`, `src/db.js`, `src/errors.js`.
+- `scripts/migrate.js`: tablas (los ALTER consultan `information_schema`: sirve en MySQL y MariaDB). `scripts/simulate-meta-webhook.js`: simula estados y entrantes de Meta (`npm run simulate -- …`). `docs/`: SPEC y colección Postman. `test/`: pruebas.
 - Variables de entorno: ver `.env.example` (solo nombres).
 
 ## Reglas
 - Ramas: `feature/*` desde `develop`, PR a `develop`. Sin commits directos a `develop` ni `main`.
 - Nunca secretos en git (`.env*` está ignorado; `.env.example` va sin valores). Tokens por canal: variable de entorno cuyo nombre se guarda en `channel.tokenEnv`.
+- Un número (canal) por marca: se rutea por `phone_number_id`. El token de cada canal vive en la variable cuyo nombre está en `channel.tokenEnv`. Un solo proceso (la caché de canales es en memoria).
 - BD propia y exclusiva; nunca compartirla con otra app.
 - En pruebas y desarrollo no escribir a teléfonos reales: usar el número de prueba de Meta y `SEND_ALLOWLIST`; las pruebas automáticas simulan Meta parchando `fetch`.
 - Cambios de API solo aditivos (las apps conectadas no deben romperse).
