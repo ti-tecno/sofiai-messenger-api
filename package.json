@@ -9,6 +9,7 @@
     "start": "node server.js",
     "dev": "node --env-file=.env --watch server.js",
     "migrate": "node --env-file=.env scripts/migrate.js",
+    "simulate": "node --env-file=.env scripts/simulate-meta-webhook.js",
     "test": "node --test"
   },
   "dependencies": {
