@@ -38,7 +38,7 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
   const { pool } = await import('../src/db.js');
   await pool.query('DROP TABLE IF EXISTS message'); await pool.query('DROP TABLE IF EXISTS client');
   await (await import('../scripts/migrate.js')).migrate();
-  const { app } = await import('../server.js');
+  const { app } = await import('../src/app.js');
   const server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
   t.after(async () => { server.close(); await pool.end(); });
   const base = `http://127.0.0.1:${server.address().port}`;

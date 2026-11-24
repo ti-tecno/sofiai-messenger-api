@@ -20,7 +20,7 @@ async function post(client, payload) {
         headers: {
           'Content-Type': 'application/json',
           'X-Signature-256': signBody(client.webhookSecret, body),
-          'User-Agent': 'eventopolis-messaging-api',
+          'User-Agent': 'sofiai-messenger-api',
         },
         body,
         signal: AbortSignal.timeout(10000),
