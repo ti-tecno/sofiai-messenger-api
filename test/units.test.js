@@ -145,3 +145,13 @@ test('findForeignTables: detecta tablas existentes que no son del mensajero', as
   // con prefijo, la tabla ajena sin prefijo no estorba
   assert.deepEqual(findForeignTables({ client: ['id', 'nombre'] }, 'msg_'), []);
 });
+
+test('safeErrorSummary: no incluye el SQL ni los valores de un error de mysql2', async () => {
+  const { safeErrorSummary } = await import('../src/errors.js');
+  const err = Object.assign(new Error("Duplicate entry 'secreto-123' for key 'x' -- INSERT INTO t (phone) VALUES ('5512345678')"), {
+    code: 'ER_DUP_ENTRY', sql: "INSERT INTO t (phone) VALUES ('5512345678')", sqlMessage: "Duplicate entry 'secreto-123' for key 'x'",
+  });
+  const out = safeErrorSummary(err);
+  assert.match(out, /ER_DUP_ENTRY/);
+  assert.doesNotMatch(out, /secreto-123|5512345678|INSERT/i);
+});

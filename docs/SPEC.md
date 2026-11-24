@@ -85,7 +85,7 @@ Esta API **no sabe nada de eventos, invitaciones ni usuarios de ningún sistema*
 "error": { "code": 131026, "message": "…de Meta…", "reason": "El número no tiene WhatsApp o no pudo recibir el mensaje", "hint": "Confirma el número con el destinatario o avísale por otro medio." }
 ```
 
-`reason` y `hint` están en español, pensados para mostrarse a una persona. `channel` es el slug del canal; `waMessageId` es el id de Meta (sirve para ligar estados y respuestas) y `contextWaId`, en un entrante, el `waMessageId` del mensaje al que contestó. Un `502 SEND_FAILED` trae `error.code: "SEND_FAILED"` y el mensaje guardado en `message` (con `status: failed` y `message.error.code` numérico de Meta).
+`reason` y `hint` están en español, pensados para mostrarse a una persona. `channel` es el slug del canal; `waMessageId` es el id de Meta (sirve para ligar estados y respuestas) y `contextWaId`, en un entrante, el `waMessageId` del mensaje al que contestó. Un `502 SEND_FAILED` trae `error.code: "SEND_FAILED"` y el mensaje guardado en `message` (con `status: failed` y `message.error.code` numérico de Meta). Además trae `error.retryable` (bool: `true` si la llave de idempotencia quedó liberada y el cliente puede reintentar con la misma `idempotencyKey`; `false` si el fallo es definitivo) y `error.httpStatus` (status HTTP de Meta, o `null` si no hubo respuesta). Los mismos campos van en `message.error` de ese 502 y en `error` de cada resultado `failed` del lote; no se guardan, así que los listados de mensajes no los traen.
 
 En mensajes entrantes `text` es el contenido (los adjuntos llegan como `[Imagen]`, `[Audio]`, `[Ubicación] lat,lng`…), `msgType` es el tipo de WhatsApp y `profileName` el nombre de perfil de quien escribió.
 

@@ -3,7 +3,7 @@ import { rows, pool } from './db.js';
 import { ApiError, wrap } from './errors.js';
 import { requireClient, requireAdmin, hashKey, newApiKey, newWebhookSecret } from './auth.js';
 import { createTemplate, normalizePhone } from './whatsapp.js';
-import { sendMessage, toApi, SEND_PAUSE_MS, sleep, getMessage } from './messages.js';
+import { sendMessage, toApi, toApiResult, SEND_PAUSE_MS, sleep, getMessage } from './messages.js';
 import { listConversations, windowOpen } from './conversations.js';
 import {
   ensureChannels, invalidateChannels, channelBySlug, clientChannels, resolveSendChannel, isChannelConfigured, tokenFor,
@@ -22,7 +22,7 @@ router.use(wrap(async (_req, _res, next) => { await ensureChannels(); next(); })
 
 // Traduce el resultado de sendMessage a la respuesta HTTP de un envío individual.
 function respondSend(res, result) {
-  const message = toApi(result.message);
+  const message = toApiResult(result);
   switch (result.status) {
     case 'sent': return res.status(201).json({ message });
     case 'duplicate': return res.status(200).json({ message, duplicate: true });
@@ -80,7 +80,8 @@ router.post('/messages/template/batch', requireClient, wrap(async (req, res) => 
       index: i,
       status: r.status,
       ...(r.reason ? { reason: r.reason } : {}),
-      ...(r.message ? { message: toApi(r.message) } : {}),
+      ...(r.message ? { message: toApiResult(r) } : {}),
+      ...(r.status === 'failed' && r.message ? { error: toApiResult(r).error } : {}),
     });
     if (r.fatal) aborted = r.message?.errorMessage ?? r.reason;
     else if (i < inputs.length - 1) await sleep(SEND_PAUSE_MS);

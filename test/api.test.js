@@ -173,6 +173,8 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
   assert.equal(fatal.status, 502);
   assert.deepEqual(fatal.json.results.map((r) => r.status), ['failed', 'not_attempted']);
   assert.match(fatal.json.results[0].message.error.reason, /plantilla/);
+  assert.equal(fatal.json.results[0].error.retryable, true, 'un error fatal libera la llave');
+  assert.equal(fatal.json.results[0].error.httpStatus, 400);
   graphFailWith = null;
   assert.equal((await call('POST', '/v1/messages/template', { key: apiKey, body: { ...tpl, to: '5511111111', idempotencyKey: 'k3' } })).status, 201, 'tras un fallo se puede reintentar');
 
@@ -267,6 +269,19 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
   assert.equal(failed.json.error.code, 'SEND_FAILED');
   assert.equal(failed.json.message.status, 'failed');
   assert.equal(failed.json.message.error.code, 131026);
+  assert.equal(failed.json.error.retryable, false);
+  assert.equal(failed.json.error.httpStatus, 400);
+  assert.equal(failed.json.message.error.retryable, false);
+
+  // B1: un error temporal de Meta (5xx / código reintentable) libera la llave y se marca retryable
+  graphFailWith = { code: 131048, message: 'spam rate limit' };
+  const temp = await call('POST', '/v1/messages/template', { key: appA.apiKey, body: { to: '5599999998', template: 't', idempotencyKey: 'f2' } });
+  graphFailWith = null;
+  assert.equal(temp.status, 502);
+  assert.equal(temp.json.error.retryable, true);
+  assert.equal(temp.json.error.httpStatus, 400);
+  const [{ n: keyRows }] = await pool.query(`SELECT COUNT(*) AS n FROM ${T.message} WHERE idempotencyKey = 'f2'`).then(([r]) => r);
+  assert.equal(Number(keyRows), 0, 'la llave se liberó');
 
   // Webhook: el Mensaje trae canal, waMessageId, contextWaId y metadata
   const hookA = received.map((r2) => ({ url: r2.headers, ...JSON.parse(r2.body) })).find((e) => e.event === 'message.received' && e.data.text === 'para A');

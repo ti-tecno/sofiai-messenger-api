@@ -67,6 +67,16 @@ async function dailyLimitReached(client) {
   return Number(total) >= client.dailyLimit;
 }
 
+// Mensaje de la API con los datos del intento de envío (no se guardan): en un fallo,
+// error.retryable (bool) y error.httpStatus (status HTTP de Meta, o null).
+export function toApiResult(r) {
+  const message = toApi(r.message);
+  if (r.status === 'failed' && message.error) {
+    message.error = { ...message.error, retryable: r.retryable ?? false, httpStatus: r.httpStatus ?? null };
+  }
+  return message;
+}
+
 // Envía un mensaje (kind 'template' | 'text') en nombre de `client`. Nunca lanza por problemas
 // del destinatario; devuelve { status, message?, reason?, fatal? }:
 //   sent · duplicate (misma idempotencyKey) · failed · skipped (reason: invalid_phone | not_allowed | daily_limit)
@@ -127,7 +137,14 @@ export async function sendMessage(client, channel, { kind, to, template, languag
       // Libera la llave para poder reintentar la misma petición más tarde.
       ...(retryable || fatal ? { idempotencyKey: null } : {}),
     });
-    return { status: 'failed', fatal, message: await getMessage(id) };
+    // retryable = la misma decisión que libera la llave: el cliente puede reintentar con la misma idempotencyKey.
+    return {
+      status: 'failed',
+      fatal,
+      retryable: retryable || fatal,
+      httpStatus: err instanceof WhatsAppError ? err.status : null,
+      message: await getMessage(id),
+    };
   }
 }
 
