@@ -1,3 +1,5 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { pool } from '../src/db.js';
 
 // Crea las tablas de esta API (CREATE TABLE IF NOT EXISTS: se puede repetir sin riesgo).
@@ -51,7 +53,7 @@ export async function migrate() {
   for (const sql of TABLES) await pool.query(sql);
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await migrate();
   console.log('Listo: tablas client y message creadas (o ya existían).');
   await pool.end();
