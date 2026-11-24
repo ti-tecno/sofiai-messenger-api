@@ -2,53 +2,61 @@ import express from 'express';
 import { rows, pool } from './db.js';
 import { ApiError, wrap } from './errors.js';
 import { requireClient, requireAdmin, hashKey, newApiKey, newWebhookSecret } from './auth.js';
-import { createTemplate, isWhatsAppConfigured, normalizePhone } from './whatsapp.js';
-import { sendMessage, toApi, SEND_PAUSE_MS, sleep, getMessage } from './messages.js';
+import { createTemplate, normalizePhone } from './whatsapp.js';
+import { sendMessage, toApi, toApiResult, SEND_PAUSE_MS, sleep, getMessage } from './messages.js';
 import { listConversations, windowOpen } from './conversations.js';
+import {
+  ensureChannels, invalidateChannels, channelBySlug, clientChannels, resolveSendChannel, isChannelConfigured, tokenFor,
+} from './channels.js';
+import { isRecipientAllowed, isSandbox } from './sandbox.js';
 import { parseTemplateMessage, parseTextMessage, listParam, dateParam, intParam } from './validate.js';
+import { T } from './tables.js';
 
 const router = express.Router();
 const MAX_BATCH = 100;
 
-// ── Envío ────────────────────────────────────────────────────────────────────
+// toApi necesita el mapa de canales cargado (id -> slug).
+router.use(wrap(async (_req, _res, next) => { await ensureChannels(); next(); }));
 
-function requireConfigured(_req, _res, next) {
-  if (!isWhatsAppConfigured()) return next(new ApiError(503, 'NOT_CONFIGURED', 'WhatsApp no está configurado en el servidor'));
-  next();
-}
+// ── Envío ────────────────────────────────────────────────────────────────────
 
 // Traduce el resultado de sendMessage a la respuesta HTTP de un envío individual.
 function respondSend(res, result) {
-  const message = toApi(result.message);
+  const message = toApiResult(result);
   switch (result.status) {
     case 'sent': return res.status(201).json({ message });
     case 'duplicate': return res.status(200).json({ message, duplicate: true });
     case 'skipped':
       if (result.reason === 'daily_limit') throw new ApiError(429, 'DAILY_LIMIT', 'Se alcanzó el límite diario de mensajes de esta app');
+      if (result.reason === 'not_allowed') throw new ApiError(403, 'RECIPIENT_NOT_ALLOWED', 'El teléfono no está en SEND_ALLOWLIST (modo sandbox)');
       throw new ApiError(422, 'INVALID_PHONE', 'El teléfono no es válido para WhatsApp');
     default:
-      return res.status(502).json({ error: { code: 'SEND_FAILED', ...message.error }, message });
+      return res.status(502).json({ error: { ...message.error, code: 'SEND_FAILED' }, message });
   }
 }
 
 // POST /v1/messages/template — plantilla aprobada por Meta
-router.post('/messages/template', requireClient, requireConfigured, wrap(async (req, res) => {
-  respondSend(res, await sendMessage(req.client, parseTemplateMessage(req.body)));
+router.post('/messages/template', requireClient, wrap(async (req, res) => {
+  const input = parseTemplateMessage(req.body);
+  const channel = await resolveSendChannel(req.client, input.channel);
+  respondSend(res, await sendMessage(req.client, channel, input));
 }));
 
 // POST /v1/messages/text — texto libre; solo dentro de las 24 h posteriores a que el destinatario escribió
-router.post('/messages/text', requireClient, requireConfigured, wrap(async (req, res) => {
+router.post('/messages/text', requireClient, wrap(async (req, res) => {
   const input = parseTextMessage(req.body);
+  const channel = await resolveSendChannel(req.client, input.channel);
   const phone = normalizePhone(input.to);
-  if (phone && !(await windowOpen(req.client.id, phone))) {
+  if (phone && !isRecipientAllowed(phone)) throw new ApiError(403, 'RECIPIENT_NOT_ALLOWED', 'El teléfono no está en SEND_ALLOWLIST (modo sandbox)');
+  if (phone && !(await windowOpen(req.client.id, channel.id, phone))) {
     throw new ApiError(409, 'WINDOW_CLOSED', 'Pasaron más de 24 h desde el último mensaje del destinatario: solo se pueden enviar plantillas.');
   }
-  respondSend(res, await sendMessage(req.client, input));
+  respondSend(res, await sendMessage(req.client, channel, input));
 }));
 
 // POST /v1/messages/template/batch — hasta 100 plantillas; secuencial, y se detiene ante errores
 // que harían fallar todo (token, plantilla, pago, límite diario).
-router.post('/messages/template/batch', requireClient, requireConfigured, wrap(async (req, res) => {
+router.post('/messages/template/batch', requireClient, wrap(async (req, res) => {
   const list = req.body?.messages;
   if (!Array.isArray(list) || !list.length || list.length > MAX_BATCH) {
     throw new ApiError(400, 'VALIDATION', `messages debe ser una lista de 1 a ${MAX_BATCH} mensajes`);
@@ -57,16 +65,23 @@ router.post('/messages/template/batch', requireClient, requireConfigured, wrap(a
     try { return parseTemplateMessage(item); } catch (err) { throw new ApiError(400, 'VALIDATION', `messages[${i}]: ${err.message}`); }
   });
 
+  // Los canales se validan todos antes de enviar nada (403/503 rechaza el lote completo).
+  const channels = new Map();
+  for (const input of inputs) {
+    if (!channels.has(input.channel ?? null)) channels.set(input.channel ?? null, await resolveSendChannel(req.client, input.channel));
+  }
+
   const results = [];
   let aborted = null;
   for (let i = 0; i < inputs.length; i += 1) {
     if (aborted) { results.push({ index: i, status: 'not_attempted' }); continue; }
-    const r = await sendMessage(req.client, inputs[i]);
+    const r = await sendMessage(req.client, channels.get(inputs[i].channel ?? null), inputs[i]);
     results.push({
       index: i,
       status: r.status,
       ...(r.reason ? { reason: r.reason } : {}),
-      ...(r.message ? { message: toApi(r.message) } : {}),
+      ...(r.message ? { message: toApiResult(r) } : {}),
+      ...(r.status === 'failed' && r.message ? { error: toApiResult(r).error } : {}),
     });
     if (r.fatal) aborted = r.message?.errorMessage ?? r.reason;
     else if (i < inputs.length - 1) await sleep(SEND_PAUSE_MS);
@@ -80,9 +95,16 @@ router.post('/messages/template/batch', requireClient, requireConfigured, wrap(a
   });
 }));
 
+// Slug -> id para filtrar; un slug desconocido da 400 (no una lista vacía engañosa).
+async function channelFilter(slug) {
+  const channel = await channelBySlug(String(slug));
+  if (!channel) throw new ApiError(400, 'VALIDATION', `channel "${slug}" no existe`);
+  return channel.id;
+}
+
 // ── Consulta ─────────────────────────────────────────────────────────────────
 
-// GET /v1/messages?ref=&phone=&direction=&kind=&template=&status=&excludeStatus=&since=&until=&limit=&offset=
+// GET /v1/messages?channel=&ref=&phone=&direction=&kind=&template=&status=&excludeStatus=&since=&until=&limit=&offset=
 router.get('/messages', requireClient, wrap(async (req, res) => {
   const q = req.query;
   const where = ['clientId = ?'];
@@ -91,6 +113,7 @@ router.get('/messages', requireClient, wrap(async (req, res) => {
   const inList = (col, list) => add(`${col} IN (${list.map(() => '?').join(',')})`, ...list);
 
   const refs = listParam(q.ref); if (refs) inList('ref', refs);
+  if (q.channel !== undefined) add('channelId = ?', await channelFilter(q.channel));
   if (q.phone !== undefined) {
     const phone = normalizePhone(q.phone);
     if (!phone) throw new ApiError(400, 'VALIDATION', 'phone no es un teléfono válido');
@@ -114,7 +137,7 @@ router.get('/messages', requireClient, wrap(async (req, res) => {
   const limit = intParam(q.limit, { name: 'limit', min: 1, max: 1000, fallback: 50 });
   const offset = intParam(q.offset, { name: 'offset', min: 0, max: 1e9, fallback: 0 });
   const data = await rows(
-    `SELECT * FROM message WHERE ${where.join(' AND ')} ORDER BY createdAt DESC, id LIMIT ? OFFSET ?`,
+    `SELECT * FROM ${T.message} WHERE ${where.join(' AND ')} ORDER BY createdAt DESC, id LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
   res.json({ data: data.map(toApi), limit, offset });
@@ -130,7 +153,8 @@ router.get('/messages/:id', requireClient, wrap(async (req, res) => {
 
 // GET /v1/conversations?ref=
 router.get('/conversations', requireClient, wrap(async (req, res) => {
-  res.json({ data: await listConversations(req.client.id, listParam(req.query.ref)) });
+  const channelId = req.query.channel !== undefined ? await channelFilter(req.query.channel) : undefined;
+  res.json({ data: await listConversations(req.client.id, listParam(req.query.ref), channelId) });
 }));
 
 // GET /v1/conversations/unread?ref=a&ref=b — mensajes recibidos sin leer (sin ref: todos los de la app)
@@ -139,7 +163,8 @@ router.get('/conversations/unread', requireClient, wrap(async (req, res) => {
   const params = [req.client.id];
   let refSql = '';
   if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
-  const [{ total }] = await rows(`SELECT COUNT(*) AS total FROM message WHERE clientId = ? AND direction = 'in' AND readAt IS NULL${refSql}`, params);
+  if (req.query.channel !== undefined) { refSql += ' AND channelId = ?'; params.push(await channelFilter(req.query.channel)); }
+  const [{ total }] = await rows(`SELECT COUNT(*) AS total FROM ${T.message} WHERE clientId = ? AND direction = 'in' AND readAt IS NULL${refSql}`, params);
   res.json({ unread: Number(total) });
 }));
 
@@ -156,8 +181,11 @@ router.get('/conversations/:phone', requireClient, wrap(async (req, res) => {
   const params = [req.client.id, phone];
   let refSql = '';
   if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
-  const thread = await rows(`SELECT * FROM message WHERE clientId = ? AND phone = ?${refSql} ORDER BY createdAt ASC LIMIT 1000`, params);
-  const [last] = await rows("SELECT MAX(createdAt) AS at FROM message WHERE clientId = ? AND phone = ? AND direction = 'in'", [req.client.id, phone]);
+  let chSql = '';
+  const chParams = [];
+  if (req.query.channel !== undefined) { chSql = ' AND channelId = ?'; chParams.push(await channelFilter(req.query.channel)); }
+  const thread = await rows(`SELECT * FROM ${T.message} WHERE clientId = ? AND phone = ?${refSql}${chSql} ORDER BY createdAt ASC LIMIT 1000`, [...params, ...chParams]);
+  const [last] = await rows(`SELECT MAX(createdAt) AS at FROM ${T.message} WHERE clientId = ? AND phone = ? AND direction = 'in'${chSql}`, [req.client.id, phone, ...chParams]);
   res.json({
     phone,
     profileName: [...thread].reverse().find((m) => m.profileName)?.profileName ?? null,
@@ -173,21 +201,25 @@ router.post('/conversations/:phone/read', requireClient, wrap(async (req, res) =
   const params = [new Date(), req.client.id, phone];
   let refSql = '';
   if (refs) { refSql = ` AND ref IN (${refs.map(() => '?').join(',')})`; params.push(...refs); }
+  if (req.body?.channel !== undefined) { refSql += ' AND channelId = ?'; params.push(await channelFilter(req.body.channel)); }
   const [result] = await pool.query(
-    `UPDATE message SET readAt = ? WHERE clientId = ? AND phone = ? AND direction = 'in' AND readAt IS NULL${refSql}`,
+    `UPDATE ${T.message} SET readAt = ? WHERE clientId = ? AND phone = ? AND direction = 'in' AND readAt IS NULL${refSql}`,
     params,
   );
   res.json({ updated: result.affectedRows });
 }));
 
 // GET /v1/me — quién soy y cómo está configurada mi app (sirve para probar la llave)
-router.get('/me', requireClient, (req, res) => {
+router.get('/me', requireClient, wrap(async (req, res) => {
   const c = req.client;
+  const channels = await clientChannels(c.id);
   res.json({
     client: { id: c.id, name: c.name, webhookUrl: c.webhookUrl, dailyLimit: c.dailyLimit },
-    whatsappConfigured: isWhatsAppConfigured(),
+    channels: channels.map((ch) => ({ slug: ch.slug, name: ch.name, displayPhone: ch.displayPhone, isDefault: ch.isDefault })),
+    whatsappConfigured: channels.some(isChannelConfigured),
+    sandbox: isSandbox(),
   });
-});
+}));
 
 // ── Administración (ADMIN_API_KEY) ───────────────────────────────────────────
 
@@ -224,21 +256,21 @@ router.post('/admin/clients', requireAdmin, wrap(async (req, res) => {
   const webhookSecret = newWebhookSecret();
   const now = new Date();
   const [result] = await pool.query(
-    'INSERT INTO client (name, apiKeyHash, webhookUrl, webhookSecret, dailyLimit, active, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?)',
+    `INSERT INTO ${T.client} (name, apiKeyHash, webhookUrl, webhookSecret, dailyLimit, active, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?)`,
     [fields.name, hashKey(apiKey), fields.webhookUrl ?? null, webhookSecret, fields.dailyLimit ?? null, fields.active ?? 1, now, now],
   );
-  const [client] = await rows('SELECT * FROM client WHERE id = ?', [result.insertId]);
+  const [client] = await rows(`SELECT * FROM ${T.client} WHERE id = ?`, [result.insertId]);
   res.status(201).json({ client: publicClient(client), apiKey, webhookSecret });
 }));
 
 router.get('/admin/clients', requireAdmin, wrap(async (_req, res) => {
-  res.json({ data: (await rows('SELECT * FROM client ORDER BY id')).map(publicClient) });
+  res.json({ data: (await rows(`SELECT * FROM ${T.client} ORDER BY id`)).map(publicClient) });
 }));
 
 // PATCH /v1/admin/clients/:id — { name?, webhookUrl?, dailyLimit?, active?, rotateKey?, rotateWebhookSecret? }
 router.patch('/admin/clients/:id', requireAdmin, wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const [existing] = await rows('SELECT * FROM client WHERE id = ?', [id]);
+  const [existing] = await rows(`SELECT * FROM ${T.client} WHERE id = ?`, [id]);
   if (!existing) throw new ApiError(404, 'NOT_FOUND', 'App cliente no encontrada');
 
   const fields = clientFields(req.body ?? {}, { creating: false });
@@ -248,19 +280,136 @@ router.patch('/admin/clients/:id', requireAdmin, wrap(async (req, res) => {
   if (!Object.keys(fields).length) throw new ApiError(400, 'VALIDATION', 'No se indicó nada que cambiar');
 
   fields.updatedAt = new Date();
-  await pool.query(`UPDATE client SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(fields), id]);
-  const [client] = await rows('SELECT * FROM client WHERE id = ?', [id]);
+  await pool.query(`UPDATE ${T.client} SET ${Object.keys(fields).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(fields), id]);
+  const [client] = await rows(`SELECT * FROM ${T.client} WHERE id = ?`, [id]);
   res.json({ client: publicClient(client), ...secrets });
 }));
 
-// POST /v1/admin/templates — crea una plantilla en la cuenta de WhatsApp Business (Meta la revisa)
-router.post('/admin/templates', requireAdmin, requireConfigured, wrap(async (req, res) => {
-  const waba = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
-  if (!waba) throw new ApiError(503, 'NOT_CONFIGURED', 'Falta WHATSAPP_BUSINESS_ACCOUNT_ID');
-  if (!req.body || typeof req.body.name !== 'string' || !Array.isArray(req.body.components)) {
-    throw new ApiError(400, 'VALIDATION', 'Se espera la definición de plantilla de Meta: { name, language, category, components }');
+// POST /v1/admin/templates — crea una plantilla en la cuenta (WABA) del canal indicado en `channel` (Meta la revisa)
+router.post('/admin/templates', requireAdmin, wrap(async (req, res) => {
+  const { channel: slug, ...definition } = req.body ?? {};
+  if (typeof slug !== 'string' || !slug) throw new ApiError(400, 'VALIDATION', 'channel (slug) es requerido: las plantillas son de la cuenta de cada canal');
+  if (typeof definition.name !== 'string' || !Array.isArray(definition.components)) {
+    throw new ApiError(400, 'VALIDATION', 'Se espera la definición de plantilla de Meta: { name, language, category, components } más channel');
   }
-  res.status(201).json(await createTemplate(waba, req.body));
+  const channel = await channelBySlug(slug);
+  if (!channel) throw new ApiError(404, 'NOT_FOUND', 'Canal no encontrado');
+  if (!channel.wabaId) throw new ApiError(503, 'NOT_CONFIGURED', `El canal "${slug}" no tiene wabaId`);
+  if (!tokenFor(channel)) throw new ApiError(503, 'NOT_CONFIGURED', `Falta el token del canal "${slug}" (variable ${channel.tokenEnv || 'WHATSAPP_TOKEN'})`);
+  res.status(201).json(await createTemplate(channel.wabaId, definition, tokenFor(channel)));
+}));
+
+// ── Canales ──────────────────────────────────────────────────────────────────
+
+const publicChannel = (c) => ({
+  id: c.id, slug: c.slug, type: c.type, name: c.name, phoneNumberId: c.phoneNumberId, wabaId: c.wabaId,
+  displayPhone: c.displayPhone, tokenEnv: c.tokenEnv, tokenConfigured: Boolean(tokenFor(c)),
+  defaultClientId: c.defaultClientId, active: Boolean(c.active), createdAt: c.createdAt, updatedAt: c.updatedAt,
+});
+
+function channelFields(body, { creating }) {
+  const out = {};
+  const text = (key, max, { required = false, pattern, hint } = {}) => {
+    const v = body[key];
+    if (v === undefined && !(creating && required)) return;
+    if (v === null && !required) { out[key] = null; return; }
+    if (typeof v !== 'string' || !v.trim() || v.length > max || (pattern && !pattern.test(v.trim()))) {
+      throw new ApiError(400, 'VALIDATION', `${key} ${hint ?? `debe ser un texto de 1 a ${max} caracteres`}`);
+    }
+    out[key] = v.trim();
+  };
+  text('slug', 50, { required: true, pattern: /^[a-z0-9][a-z0-9-]*$/, hint: 'debe ser minúsculas, números y guiones (máx. 50)' });
+  text('name', 100, { required: true });
+  text('phoneNumberId', 40, { pattern: /^\d+$/, hint: 'debe ser el id numérico del número en Meta' });
+  text('wabaId', 40, { pattern: /^\d+$/, hint: 'debe ser el id numérico de la cuenta de WhatsApp Business' });
+  text('displayPhone', 20);
+  text('tokenEnv', 64, { pattern: /^[A-Z][A-Z0-9_]*$/, hint: 'debe ser el NOMBRE de una variable de entorno (MAYUSCULAS_Y_GUIONES_BAJOS), no el token' });
+  if (body.defaultClientId !== undefined) {
+    if (body.defaultClientId !== null && !Number.isInteger(body.defaultClientId)) throw new ApiError(400, 'VALIDATION', 'defaultClientId debe ser el id de una app o null');
+    out.defaultClientId = body.defaultClientId;
+  }
+  if (body.active !== undefined) {
+    if (typeof body.active !== 'boolean') throw new ApiError(400, 'VALIDATION', 'active debe ser true o false');
+    out.active = body.active ? 1 : 0;
+  }
+  return out;
+}
+
+async function assertClientExists(id) {
+  if (id == null) return;
+  const [c] = await rows(`SELECT id FROM ${T.client} WHERE id = ?`, [id]);
+  if (!c) throw new ApiError(400, 'VALIDATION', `defaultClientId ${id}: la app no existe`);
+}
+
+const duplicateAs409 = (err) => {
+  if (err.code === 'ER_DUP_ENTRY') throw new ApiError(409, 'CONFLICT', 'Ya existe un canal con ese slug o phoneNumberId');
+  throw err;
+};
+
+// POST /v1/admin/channels
+router.post('/admin/channels', requireAdmin, wrap(async (req, res) => {
+  const f = channelFields(req.body ?? {}, { creating: true });
+  await assertClientExists(f.defaultClientId);
+  const now = new Date();
+  const row = { type: 'whatsapp', active: 1, createdAt: now, updatedAt: now, ...f };
+  const keys = Object.keys(row);
+  const [result] = await pool.query(`INSERT INTO ${T.channel} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => row[k])).catch(duplicateAs409);
+  invalidateChannels();
+  const [channel] = await rows(`SELECT * FROM ${T.channel} WHERE id = ?`, [result.insertId]);
+  res.status(201).json({ channel: publicChannel(channel) });
+}));
+
+router.get('/admin/channels', requireAdmin, wrap(async (_req, res) => {
+  res.json({ data: (await rows(`SELECT * FROM ${T.channel} ORDER BY id`)).map(publicChannel) });
+}));
+
+// PATCH /v1/admin/channels/:slug
+router.patch('/admin/channels/:slug', requireAdmin, wrap(async (req, res) => {
+  const [existing] = await rows(`SELECT * FROM ${T.channel} WHERE slug = ?`, [req.params.slug]);
+  if (!existing) throw new ApiError(404, 'NOT_FOUND', 'Canal no encontrado');
+  const f = channelFields(req.body ?? {}, { creating: false });
+  if (!Object.keys(f).length) throw new ApiError(400, 'VALIDATION', 'No se indicó nada que cambiar');
+  await assertClientExists(f.defaultClientId);
+  f.updatedAt = new Date();
+  await pool.query(`UPDATE ${T.channel} SET ${Object.keys(f).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...Object.values(f), existing.id]).catch(duplicateAs409);
+  invalidateChannels();
+  const [channel] = await rows(`SELECT * FROM ${T.channel} WHERE id = ?`, [existing.id]);
+  res.json({ channel: publicChannel(channel) });
+}));
+
+// PUT /v1/admin/clients/:id/channels — { channels: [{ slug, isDefault }] } reemplaza las asignaciones de la app
+router.put('/admin/clients/:id/channels', requireAdmin, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const [client] = await rows(`SELECT id FROM ${T.client} WHERE id = ?`, [id]);
+  if (!client) throw new ApiError(404, 'NOT_FOUND', 'App cliente no encontrada');
+  const list = req.body?.channels;
+  if (!Array.isArray(list)) throw new ApiError(400, 'VALIDATION', 'channels debe ser una lista [{ slug, isDefault }]');
+
+  const links = [];
+  for (const item of list) {
+    const channel = typeof item?.slug === 'string' ? await channelBySlug(item.slug) : null;
+    if (!channel) throw new ApiError(400, 'VALIDATION', `Canal desconocido: ${item?.slug}`);
+    if (links.some((l) => l.channelId === channel.id)) throw new ApiError(400, 'VALIDATION', `Canal repetido: ${item.slug}`);
+    links.push({ channelId: channel.id, isDefault: item.isDefault === true });
+  }
+  const defaults = links.filter((l) => l.isDefault).length;
+  if (defaults > 1) throw new ApiError(400, 'VALIDATION', 'Solo un canal puede ser isDefault');
+  if (links.length === 1) links[0].isDefault = true;
+  else if (links.length > 1 && defaults === 0) throw new ApiError(400, 'VALIDATION', 'Con varios canales, uno debe ser isDefault');
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(`DELETE FROM ${T.client_channel} WHERE clientId = ?`, [id]);
+    for (const l of links) await conn.query(`INSERT INTO ${T.client_channel} (clientId, channelId, isDefault) VALUES (?,?,?)`, [id, l.channelId, l.isDefault ? 1 : 0]);
+    await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+  res.json({ channels: (await clientChannels(id)).map((c) => ({ slug: c.slug, isDefault: c.isDefault })) });
 }));
 
 export default router;
