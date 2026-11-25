@@ -155,3 +155,24 @@ test('safeErrorSummary: no incluye el SQL ni los valores de un error de mysql2',
   assert.match(out, /ER_DUP_ENTRY/);
   assert.doesNotMatch(out, /secreto-123|5512345678|INSERT/i);
 });
+
+test('plantilla de autenticación: otpCode se valida y va en el cuerpo y en el botón', async () => {
+  const ok = parseTemplateMessage({ to: '5512345678', template: 'codigo', parameters: { otpCode: '482913' } });
+  assert.deepEqual(ok.parameters, { otpCode: '482913' });
+  assert.throws(() => parseTemplateMessage({ to: '5512345678', template: 'codigo', parameters: { otpCode: '12' } }), /otpCode/);
+  assert.throws(() => parseTemplateMessage({ to: '5512345678', template: 'codigo', parameters: { otpCode: '48 29' } }), /otpCode/);
+  assert.throws(() => parseTemplateMessage({ to: '5512345678', template: 'codigo', parameters: { otpCode: '482913', body: { a: 1 } } }), /no se combina/);
+
+  const { sendTemplate } = await import('../src/whatsapp.js');
+  const original = globalThis.fetch;
+  let sent;
+  globalThis.fetch = async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ messages: [{ id: 'wamid.X' }] }), { status: 200 }); };
+  try {
+    const r = await sendTemplate({ channel: { phoneNumberId: '1', token: 't' }, to: '525512345678', template: 'codigo', parameters: { otpCode: '482913' } });
+    assert.equal(r.messageId, 'wamid.X');
+    assert.deepEqual(sent.template.components, [
+      { type: 'body', parameters: [{ type: 'text', text: '482913' }] },
+      { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: '482913' }] },
+    ]);
+  } finally { globalThis.fetch = original; }
+});
