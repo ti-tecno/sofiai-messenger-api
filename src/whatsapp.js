@@ -71,7 +71,7 @@ async function graphRequest(path, body, token) {
 }
 
 // `channel` = { phoneNumberId, token }: el número desde el que se envía.
-// Plantilla aprobada. `parameters` = { body: {nombre: valor}, buttonUrlSuffix?, headerImageUrl? }.
+// Plantilla aprobada. `parameters` = { body: {nombre: valor}, buttonUrlSuffix?, headerImageUrl? } o { otpCode }.
 export async function sendTemplate({ channel, to, template, language = 'es_MX', parameters = {} }) {
   const components = [];
 
@@ -94,6 +94,13 @@ export async function sendTemplate({ channel, to, template, language = 'es_MX', 
 
   if (parameters.buttonUrlSuffix) {
     components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: parameters.buttonUrlSuffix }] });
+  }
+
+  // Plantilla de autenticación de Meta: una sola variable sin nombre en el cuerpo y el mismo
+  // código en el botón "copiar código" (que Meta trata como botón de URL en el índice 0).
+  if (parameters.otpCode) {
+    components.push({ type: 'body', parameters: [{ type: 'text', text: parameters.otpCode }] });
+    components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: parameters.otpCode }] });
   }
 
   const data = await graphRequest(`${channel.phoneNumberId}/messages`, {

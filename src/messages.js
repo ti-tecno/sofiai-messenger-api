@@ -105,7 +105,8 @@ export async function sendMessage(client, channel, { kind, to, template, languag
       kind,
       phone,
       template: kind === 'template' ? template : null,
-      params: kind === 'template' ? JSON.stringify({ language, ...parameters }) : null,
+      // El código de un solo uso nunca se guarda: en el historial queda enmascarado.
+      params: kind === 'template' ? JSON.stringify({ language, ...parameters, ...(parameters?.otpCode ? { otpCode: '***' } : {}) }) : null,
       body: kind === 'text' ? text : null,
       ref: ref ?? null,
       metadata: metadata ? JSON.stringify(metadata) : null,

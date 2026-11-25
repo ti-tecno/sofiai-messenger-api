@@ -45,6 +45,12 @@ export function parseTemplateMessage(body) {
     if (typeof p.headerImageUrl !== 'string' || !/^https:\/\//.test(p.headerImageUrl)) throw bad('parameters.headerImageUrl debe ser una URL https');
     parameters.headerImageUrl = p.headerImageUrl;
   }
+  // Plantillas de autenticación (código de un solo uso): el código va en el cuerpo y en el botón de copiar.
+  if (p.otpCode !== undefined) {
+    if (typeof p.otpCode !== 'string' || !/^[A-Za-z0-9]{4,15}$/.test(p.otpCode)) throw bad('parameters.otpCode debe ser un código de 4 a 15 letras o números');
+    if (parameters.body || parameters.buttonUrlSuffix || parameters.headerImageUrl) throw bad('parameters.otpCode no se combina con body, buttonUrlSuffix ni headerImageUrl');
+    parameters.otpCode = p.otpCode;
+  }
   out.parameters = parameters;
   return out;
 }
