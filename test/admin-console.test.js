@@ -156,4 +156,38 @@ test('backoffice: resumen, por evento, mensajes, conversaciones y envío en nomb
   // Apps con sus canales
   const cl = (await call('GET', '/v1/admin/console/clients')).json.data;
   assert.deepEqual(cl.map((c) => [c.name, c.active, c.channels[0]?.slug]), [['Eventopolis', true, 'default'], ['CEINVET', false, 'default']]);
+
+  // Importar historial: lo existente (por waMessageId) solo avanza de estado; lo nuevo se inserta; repetible
+  const history = {
+    messages: [
+      { direction: 'out', phone: '5512345678', waMessageId: sent.json.message.waMessageId, template: 'recordatorio_evento', status: 'read', createdAt: '2026-11-20T18:00:00Z', ref: 'event:14' },
+      { direction: 'out', phone: '5522222222', waMessageId: 'wamid.hist1', idempotencyKey: 'wm:1', template: 'recordatorio_evento', status: 'delivered', createdAt: '2026-11-01T18:00:00Z', ref: 'event:14', metadata: { refLabel: 'Boda I&F', localId: 'wm:1' } },
+      { direction: 'in', phone: '5522222222', waMessageId: 'wamid.hist2', text: 'Gracias', profileName: 'Luis', readAt: '2026-11-02T10:00:00Z', createdAt: '2026-11-01T19:00:00Z', ref: 'event:14' },
+      { direction: 'out', phone: '12', status: 'sent', createdAt: '2026-11-01T18:00:00Z' },
+    ],
+  };
+  const imp = await call('POST', `/v1/admin/console/clients/${a.client.id}/messages/import`, { body: history });
+  assert.equal(imp.status, 200);
+  assert.deepEqual(imp.json.summary, { inserted: 2, updated: 1, unchanged: 0, invalid: 1 });
+  assert.equal(imp.json.errors[0].index, 3);
+  const again2 = await call('POST', `/v1/admin/console/clients/${a.client.id}/messages/import`, { body: history });
+  assert.deepEqual(again2.json.summary, { inserted: 0, updated: 0, unchanged: 3, invalid: 1 });
+  const original = (await call('GET', `/v1/admin/console/messages?client=${a.client.id}&phone=5512345678&direction=out&kind=template`)).json.data[0];
+  assert.equal(original.status, 'read');
+  assert.equal(original.metadata.origin, undefined); // no se marca como importado lo que ya existía
+  const hist = (await call('GET', `/v1/admin/console/messages?client=${a.client.id}&phone=5522222222&since=2000-01-01T00:00:00Z`)).json.data;
+  assert.deepEqual(hist.map((m) => [m.direction, m.status, m.metadata.origin]).sort(), [['in', 'received', 'import'], ['out', 'delivered', 'import']]);
+  assert.equal((await call('POST', `/v1/admin/console/clients/${a.client.id}/messages/import`, { body: { messages: [] } })).status, 400);
+
+  // Costo estimado: plantillas no fallidas × tarifa (utility US$0.0085); el texto libre no cuenta
+  const since = '2000-01-01T00:00:00Z';
+  const sum2 = (await call('GET', `/v1/admin/console/summary?since=${since}`)).json;
+  const evCost = sum2.clients.find((c) => c.name === 'Eventopolis').cost;
+  assert.equal(evCost.billable, 3); // Ana, Luis (lote) y el histórico
+  assert.equal(evCost.costUsd, 0.0255);
+  assert.deepEqual(evCost.byCategory, { UTILITY: 3 });
+  assert.equal(sum2.totals.cost.costUsd, 0.0255);
+  assert.equal(sum2.pricing.perMessage.MARKETING, 0.0436);
+  const ref14 = (await call('GET', `/v1/admin/console/refs?since=${since}`)).json.data.find((x) => x.ref === 'event:14');
+  assert.equal(ref14.cost.billable, 3);
 });

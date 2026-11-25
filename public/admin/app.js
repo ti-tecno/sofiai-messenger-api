@@ -9,7 +9,11 @@ const API = '/v1/admin/console';
 const PRICE = { UTILITY: 0.0085, AUTHENTICATION: 0.0085, MARKETING: 0.0436 }; // USD aprox. por mensaje en México
 
 const $ = (sel) => document.querySelector(sel);
-const main = () => $('#main');
+// replaceChildren ignora los null/false de las secciones opcionales (si no, se pintaría "null")
+const main = () => {
+  const el = $('#main');
+  return { el, replaceChildren: (...nodes) => el.replaceChildren(...nodes.filter((x) => x != null && x !== false)) };
+};
 
 // ── utilidades ───────────────────────────────────────────────────────────────
 function h(tag, attrs = {}, ...children) {
@@ -34,6 +38,9 @@ const fmtDate = (iso, withYear = false) => (iso
 const fmtPhone = (p) => (p && p.startsWith('52') && p.length === 12 ? `${p.slice(2, 5)} ${p.slice(5, 8)} ${p.slice(8)}` : p ? `+${p}` : '—');
 const n = (v) => Number(v ?? 0).toLocaleString('es-MX');
 const usd = (v) => `US$${v.toFixed(2)}`;
+// Costo estimado (lo calcula el servidor: plantillas no fallidas × tarifa de México por categoría)
+const COST_NOTE = 'Costo estimado: plantillas enviadas que no fallaron × tarifa de Meta para México (utilidad US$0.0085, marketing US$0.0436). Las respuestas de texto libre no se cobran. Es una referencia: la factura de Meta puede ser menor (no cobra plantillas de utilidad dentro de una conversación abierta) y se cobra en tu moneda.';
+const costCell = (c) => (c && c.billable ? h('span', { title: `${n(c.billable)} plantilla(s) cobrable(s)` }, usd(c.costUsd)) : '—');
 
 let toastTimer;
 function toast(msg) {
@@ -140,7 +147,7 @@ async function route() {
 function rangeSelect(value, onchange) {
   return h('label', {}, 'Periodo',
     h('select', { onchange: (e) => onchange(e.target.value) },
-      [['7', 'Últimos 7 días'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['365', 'Último año']]
+      [['7', 'Últimos 7 días'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['365', 'Último año'], ['3650', 'Todo']]
         .map(([v, l]) => h('option', { value: v, selected: v === value }, l))));
 }
 const sinceFor = (days) => new Date(Date.now() - Number(days || 30) * 86400000).toISOString();
@@ -172,16 +179,18 @@ async function viewSummary(p) {
       h('div', { class: 'tile' }, h('b', {}, n(s.totals.out.read)), h('span', {}, 'leídos')),
       h('div', { class: `tile ${s.totals.out.failed ? 'bad' : ''}` }, h('b', {}, n(s.totals.out.failed)), h('span', {}, 'fallidos')),
       h('div', { class: 'tile' }, h('b', {}, n(s.totals.in)), h('span', {}, 'recibidos')),
-      h('div', { class: `tile ${s.totals.unread ? 'bad' : ''}` }, h('b', {}, n(s.totals.unread)), h('span', {}, 'sin leer'))),
+      h('div', { class: `tile ${s.totals.unread ? 'bad' : ''}` }, h('b', {}, n(s.totals.unread)), h('span', {}, 'sin leer')),
+      h('div', { class: 'tile', title: COST_NOTE }, h('b', {}, usd(s.totals.cost.costUsd)), h('span', {}, `costo estimado (${n(s.totals.cost.billable)} plantillas)`))),
+    h('p', { class: 'muted' }, COST_NOTE),
     h('h2', {}, 'Por app'),
     table(
-      [['App'], ['Estado'], ['Enviados', 'num'], ['Entregados/leídos', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Últimas 24 h / límite', 'num'], ['Última actividad']],
+      [['App'], ['Estado'], ['Enviados', 'num'], ['Entregados/leídos', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Costo est.', 'num'], ['Últimas 24 h / límite', 'num'], ['Última actividad']],
       s.clients.map((c) => ({
         c,
         cells: [
           c.name,
           c.active ? h('span', { class: 'badge good' }, 'Activa') : h('span', { class: 'badge' }, 'Desactivada'),
-          n(c.outTotal), n(ok(c)), n(c.out.failed), n(c.in), n(c.unread),
+          n(c.outTotal), n(ok(c)), n(c.out.failed), n(c.in), n(c.unread), costCell(c.cost),
           c.dailyLimit ? h('span', { class: c.usage24h >= c.dailyLimit ? 'err' : '' }, `${n(c.usage24h)} / ${n(c.dailyLimit)}`) : `${n(c.usage24h)} / sin límite`,
           fmtDate(c.lastAt),
         ],
@@ -190,8 +199,8 @@ async function viewSummary(p) {
     ),
     h('h2', {}, 'Por número (canal)'),
     table(
-      [['Canal'], ['Número'], ['Configurado'], ['Enviados', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num']],
-      s.channels.map((c) => ({ cells: [`${c.name} (${c.slug})`, c.displayPhone ?? '—', c.configured ? h('span', { class: 'badge good' }, 'Sí') : h('span', { class: 'badge bad' }, 'No'), n(c.outTotal), n(c.out.failed), n(c.in), n(c.unread)] })),
+      [['Canal'], ['Número'], ['Configurado'], ['Enviados', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Costo est.', 'num']],
+      s.channels.map((c) => ({ cells: [`${c.name} (${c.slug})`, c.displayPhone ?? '—', c.configured ? h('span', { class: 'badge good' }, 'Sí') : h('span', { class: 'badge bad' }, 'No'), n(c.outTotal), n(c.out.failed), n(c.in), n(c.unread), costCell(c.cost)] })),
       { empty: 'No hay canales.' },
     ),
     s.unassigned.in ? h('p', { class: 'muted' }, `${n(s.unassigned.in)} mensaje(s) recibido(s) no se pudieron asignar a ninguna app (el canal no tiene app por defecto).`) : null,
@@ -216,18 +225,19 @@ async function viewRefs(p) {
       rangeSelect(days, (v) => go('eventos', { ...p, dias: v })),
       h('label', {}, 'Buscar', h('input', { value: p.buscar ?? '', placeholder: 'Nombre o ref', onchange: (e) => go('eventos', { ...p, buscar: e.target.value }) }))),
     table(
-      [['Evento / ref'], ['App'], ['Personas', 'num'], ['Enviados', 'num'], ['Entregados', 'num'], ['Leídos', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Última actividad']],
+      [['Evento / ref'], ['App'], ['Personas', 'num'], ['Enviados', 'num'], ['Entregados', 'num'], ['Leídos', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Costo est.', 'num'], ['Última actividad']],
       data.map((x) => ({
         x,
         cells: [
           h('div', {}, x.label ?? x.ref, x.label ? h('div', { class: 'muted' }, x.ref) : null),
           x.clientName ?? '—', n(x.phones), n(x.outTotal), n(x.delivered), n(x.read),
           x.failed ? h('span', { class: 'err' }, n(x.failed)) : '0', n(x.inbound),
-          x.unread ? h('span', { class: 'badge bad' }, n(x.unread)) : '0', fmtDate(x.lastAt),
+          x.unread ? h('span', { class: 'badge bad' }, n(x.unread)) : '0', costCell(x.cost), fmtDate(x.lastAt),
         ],
       })),
       { empty: 'Sin actividad con referencia en este periodo.', onRow: (row) => go('mensajes', { app: row.x.clientId, ref: row.x.ref, etiqueta: row.x.label ?? '' }) },
     ),
+    data.length ? h('p', { class: 'muted' }, `Costo estimado de lo mostrado: ${usd(data.reduce((t, x) => t + (x.cost?.costUsd ?? 0), 0))}. ${COST_NOTE}`) : null,
   );
 }
 

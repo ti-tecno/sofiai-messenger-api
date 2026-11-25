@@ -13,7 +13,9 @@ import { requireAdmin } from './auth.js';
 import { normalizePhone, listTemplates, WhatsAppError } from './whatsapp.js';
 import { toApi } from './messages.js';
 import { listConversations, getThread, markRead } from './conversations.js';
-import { ensureChannels, channelBySlug, tokenFor, isChannelConfigured } from './channels.js';
+import { ensureChannels, channelBySlug, tokenFor, isChannelConfigured, resolveSendChannel } from './channels.js';
+import { priceRows, BILLABLE_SQL, emptyCost, addCost, PRICE_MX_USD } from './pricing.js';
+import { importMessages, MAX_IMPORT } from './import.js';
 import { channelFilter, messageFilters } from './queries.js';
 import { sendTemplateAs, sendTextAs, sendBatchAs } from './send-handlers.js';
 import { listParam, dateParam, intParam } from './validate.js';
@@ -96,12 +98,18 @@ router.get('/summary', wrap(async (req, res) => {
     [new Date(Date.now() - DAY)],
   );
   const clients = await rows(`SELECT id, name, dailyLimit, active FROM ${T.client} ORDER BY id`);
-  const { list: channels } = await ensureChannels();
+  const { list: channels, byId: channelsById } = await ensureChannels();
+  // Costo estimado: plantillas no fallidas del periodo × tarifa de su categoría (src/pricing.js)
+  const priced = await priceRows(await rows(
+    `SELECT clientId, channelId, template, COUNT(*) AS n FROM ${T.message}
+      WHERE ${BILLABLE_SQL} AND createdAt >= ? AND createdAt < ? GROUP BY clientId, channelId, template`,
+    [since, until],
+  ), channelsById);
 
-  const byClient = new Map(clients.map((c) => [c.id, { id: c.id, name: c.name, active: Boolean(c.active), dailyLimit: c.dailyLimit, usage24h: 0, ...emptyCounts() }]));
-  const byChannel = new Map(channels.map((c) => [c.id, { slug: c.slug, name: c.name, displayPhone: c.displayPhone, configured: isChannelConfigured(c), ...emptyCounts() }]));
+  const byClient = new Map(clients.map((c) => [c.id, { id: c.id, name: c.name, active: Boolean(c.active), dailyLimit: c.dailyLimit, usage24h: 0, ...emptyCounts(), cost: emptyCost() }]));
+  const byChannel = new Map(channels.map((c) => [c.id, { slug: c.slug, name: c.name, displayPhone: c.displayPhone, configured: isChannelConfigured(c), ...emptyCounts(), cost: emptyCost() }]));
   const unassigned = emptyCounts(); // entrantes sin app (canal sin app por defecto)
-  const totals = emptyCounts();
+  const totals = { ...emptyCounts(), cost: emptyCost() };
   for (const r of grouped) {
     addCounts(totals, r);
     if (r.clientId == null) addCounts(unassigned, r);
@@ -109,10 +117,16 @@ router.get('/summary', wrap(async (req, res) => {
     if (r.channelId != null && byChannel.has(r.channelId)) addCounts(byChannel.get(r.channelId), r);
   }
   for (const u of usage) if (byClient.has(u.clientId)) byClient.get(u.clientId).usage24h = num(u.n);
+  for (const r of priced) {
+    addCost(totals.cost, r);
+    if (byClient.has(r.clientId)) addCost(byClient.get(r.clientId).cost, r);
+    if (byChannel.has(r.channelId)) addCost(byChannel.get(r.channelId).cost, r);
+  }
   const allow = sendAllowlist();
   res.json({
     since, until,
     sandbox: allow ? { recipients: allow.size } : null,
+    pricing: { currency: 'USD', country: 'MX', perMessage: PRICE_MX_USD },
     totals,
     clients: [...byClient.values()],
     channels: [...byChannel.values()],
@@ -152,6 +166,17 @@ router.get('/refs', wrap(async (req, res) => {
     const label = parseJson(r.metadata)?.refLabel;
     if (!labels.has(key) && typeof label === 'string' && label.trim()) labels.set(key, label.trim().slice(0, 120));
   }
+  const { byId: channelsById } = await ensureChannels();
+  const costs = new Map();
+  for (const r of await priceRows(await rows(
+    `SELECT clientId, ref, channelId, template, COUNT(*) AS n FROM ${T.message}
+      WHERE ${where.join(' AND ')} AND ${BILLABLE_SQL} GROUP BY clientId, ref, channelId, template`,
+    params,
+  ), channelsById)) {
+    const key = `${r.clientId}|${r.ref}`;
+    if (!costs.has(key)) costs.set(key, emptyCost());
+    addCost(costs.get(key), r);
+  }
   const names = new Map((await rows(`SELECT id, name FROM ${T.client}`)).map((c) => [c.id, c.name]));
   res.json({
     since, until,
@@ -162,6 +187,7 @@ router.get('/refs', wrap(async (req, res) => {
       label: labels.get(`${g.clientId}|${g.ref}`) ?? null,
       outTotal: num(g.outTotal), failed: num(g.failed), delivered: num(g.delivered), read: num(g.readCount),
       inbound: num(g.inbound), unread: num(g.unread), phones: num(g.phones),
+      cost: costs.get(`${g.clientId}|${g.ref}`) ?? emptyCost(),
       firstAt: g.firstAt, lastAt: g.lastAt,
     })),
   });
@@ -220,6 +246,18 @@ router.post('/clients/:id/messages/text', wrap(async (req, res) => {
 }));
 router.post('/clients/:id/messages/template/batch', wrap(async (req, res) => {
   await sendBatchAs(await loadClient(req.params.id, { mustBeActive: true }), req.body, res, fromBackoffice);
+}));
+
+// POST /v1/admin/console/clients/:id/messages/import { channel?, messages: [...] } — historial de la app.
+// Repetible: lo que ya existe (por waMessageId o idempotencyKey) solo avanza de estado. Ver SPEC §8.1.
+router.post('/clients/:id/messages/import', wrap(async (req, res) => {
+  const client = await loadClient(req.params.id);
+  const list = req.body?.messages;
+  if (!Array.isArray(list) || !list.length || list.length > MAX_IMPORT) {
+    throw new ApiError(400, 'VALIDATION', `messages debe ser una lista de 1 a ${MAX_IMPORT} mensajes`);
+  }
+  const channel = await resolveSendChannel(client, req.body.channel);
+  res.json(await importMessages(client, channel, list));
 }));
 
 // GET /v1/admin/console/channels/:slug/templates — plantillas aprobadas de la cuenta del canal, listas para llenar
