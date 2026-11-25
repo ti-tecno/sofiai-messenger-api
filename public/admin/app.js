@@ -160,6 +160,21 @@ function table(headers, rowsData, { empty = 'Sin datos.', onRow } = {}) {
       r.cells.map((c, i) => h('td', { class: headers[i][1] }, c)))))));
 }
 
+// Interruptor por app: apagada, su llave recibe 403 CLIENT_DISABLED en toda la API (no envía ni consulta).
+// Lo que le contesten se sigue guardando; solo no se le avisa por webhook mientras esté apagada.
+async function toggleClient(c, p) {
+  const turnOn = !c.active;
+  const question = turnOn
+    ? `¿Encender "${c.name}"? Podrá enviar mensajes de inmediato (cada plantilla entregada se cobra).`
+    : `¿Apagar "${c.name}"? Dejará de enviar y de consultar hasta que la vuelvas a encender.`;
+  if (!window.confirm(question)) return;
+  try {
+    await api(`/v1/admin/clients/${c.id}`, { method: 'PATCH', body: { active: turnOn } });
+    toast(`${c.name}: ${turnOn ? 'encendida' : 'apagada'}`);
+    await viewSummary(p);
+  } catch (e) { toast(e.message); }
+}
+
 // Resumen
 async function viewSummary(p) {
   const days = p.dias || '30';
@@ -184,12 +199,13 @@ async function viewSummary(p) {
     h('p', { class: 'muted' }, COST_NOTE),
     h('h2', {}, 'Por app'),
     table(
-      [['App'], ['Estado'], ['Enviados', 'num'], ['Entregados/leídos', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Costo est.', 'num'], ['Últimas 24 h / límite', 'num'], ['Última actividad']],
+      [['App'], ['Estado'], ['Servicio'], ['Enviados', 'num'], ['Entregados/leídos', 'num'], ['Fallidos', 'num'], ['Recibidos', 'num'], ['Sin leer', 'num'], ['Costo est.', 'num'], ['Últimas 24 h / límite', 'num'], ['Última actividad']],
       s.clients.map((c) => ({
         c,
         cells: [
           c.name,
           c.active ? h('span', { class: 'badge good' }, 'Activa') : h('span', { class: 'badge' }, 'Desactivada'),
+          h('button', { type: 'button', class: 'btn', title: c.active ? 'Apagar: la app deja de enviar y de consultar (403 CLIENT_DISABLED)' : 'Encender cuando la app tenga su servicio pagado', onclick: (e) => { e.stopPropagation(); toggleClient(c, p); } }, c.active ? 'Apagar' : 'Encender'),
           n(c.outTotal), n(ok(c)), n(c.out.failed), n(c.in), n(c.unread), costCell(c.cost),
           c.dailyLimit ? h('span', { class: c.usage24h >= c.dailyLimit ? 'err' : '' }, `${n(c.usage24h)} / ${n(c.dailyLimit)}`) : `${n(c.usage24h)} / sin límite`,
           fmtDate(c.lastAt),

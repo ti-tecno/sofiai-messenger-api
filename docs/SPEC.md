@@ -199,7 +199,7 @@ Responde **2xx** rápido. Se reintenta 3 veces (de inmediato, a 1 s y a 5 s) ant
 ### 8.1 Backoffice (`/admin` y `/v1/admin/console`)
 
 Página web para operar el mensajero: **`/admin`** (HTML+JS sin dependencias, servido por el propio proceso). Pide la `ADMIN_API_KEY`, que se guarda solo en la pestaña (`sessionStorage`). Tiene cinco vistas:
-- **Resumen**: totales del periodo, por app (enviados, fallidos, recibidos, sin leer, uso de 24 h contra `dailyLimit`) y por canal, más el aviso de sandbox.
+- **Resumen**: totales del periodo, por app (enviados, fallidos, recibidos, sin leer, uso de 24 h contra `dailyLimit`) y por canal, más el aviso de sandbox. Cada app tiene su interruptor **Encender / Apagar** (cambia `active` con `PATCH /v1/admin/clients/:id`): apagada, su llave recibe `403 CLIENT_DISABLED` en toda la API y no se le mandan webhooks; lo que le contesten se sigue guardando. Se enciende cuando la app tiene su servicio pagado.
 - **Por evento**: actividad agrupada por app y `ref` (en Eventopolis, `event:<id>`). El nombre visible sale de `metadata.refLabel` del mensaje más reciente con esa ref: las apps que quieran verlo deben mandarlo.
 - **Mensajes**: todos los mensajes con filtros (app, sin app, ref, dirección, estado, teléfono, periodo) y el motivo de cada falla.
 - **Conversaciones**: lo que contestan las personas a cada app. Permite marcar como leído y responder con texto libre **solo dentro de la ventana de 24 h**.
