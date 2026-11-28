@@ -18,6 +18,16 @@ export function isValidSignature(rawBody, header, appSecret) {
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
+// Claves de las apps de Meta cuyos eventos se aceptan: WHATSAPP_APP_SECRET (la principal) y, separadas por comas,
+// las de WHATSAPP_APP_SECRETS_EXTRA. Hace falta más de una cuando hay números en apps de Meta distintas
+// (cada app firma sus eventos con su propia clave). Sin la variable extra, el comportamiento es el de siempre.
+export function appSecrets(env = process.env) {
+  const extra = String(env.WHATSAPP_APP_SECRETS_EXTRA || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return [env.WHATSAPP_APP_SECRET, ...extra].filter(Boolean);
+}
+
+export const isValidSignatureAny = (rawBody, header, secrets) => secrets.some((s) => isValidSignature(rawBody, header, s));
+
 // Apretón de manos al guardar el webhook en el panel de Meta.
 router.get('/', (req, res) => {
   const token = req.query['hub.verify_token'];
@@ -88,7 +98,7 @@ async function storeInbound(channel, parsed) {
 }
 
 router.post('/', (req, res) => {
-  if (!isValidSignature(req.rawBody, req.get('x-hub-signature-256'), process.env.WHATSAPP_APP_SECRET)) {
+  if (!isValidSignatureAny(req.rawBody, req.get('x-hub-signature-256'), appSecrets())) {
     return res.sendStatus(401);
   }
   // Responder ya: Meta reintenta hasta 7 días si tardamos o fallamos.
