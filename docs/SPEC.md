@@ -231,7 +231,7 @@ Rutas de datos (todas con `Authorization: Bearer <ADMIN_API_KEY>`; las fechas en
 
 - `GET /health` → `{ "status": "ok" }` (503 `db_error` si la BD no responde). Sin autenticación.
 - `GET /v1/me` → tu app, sus `channels: [{ slug, name, displayPhone, isDefault }]`, si hay WhatsApp configurado y `sandbox: true|false`; útil para probar una llave.
-- `GET|POST /webhooks/whatsapp` — **solo para Meta** (verificación y eventos, con firma `X-Hub-Signature-256` y `WHATSAPP_APP_SECRET`; si hay números en otras apps de Meta, sus claves van en `WHATSAPP_APP_SECRETS_EXTRA`, separadas por comas, y se acepta cualquiera). Es la URL que se pone en la configuración del webhook de la app de Meta: `https://<host>/webhooks/whatsapp`.
+- `GET|POST /webhooks/whatsapp` — **solo para Meta** (verificación y eventos, con firma `X-Hub-Signature-256` y `WHATSAPP_APP_SECRET`; si hay números en otras apps de Meta, sus claves van en `WHATSAPP_APP_SECRETS_EXTRA` como `<waba_id>:<clave>`, separadas por comas: cada clave extra solo vale para los eventos de su cuenta de WhatsApp Business, y la principal deja de valer para esas cuentas. Además, si un canal tiene `wabaId`, solo se aceptan eventos de esa cuenta). Es la URL que se pone en la configuración del webhook de la app de Meta: `https://<host>/webhooks/whatsapp`.
 
 ## 10. Datos y costos
 

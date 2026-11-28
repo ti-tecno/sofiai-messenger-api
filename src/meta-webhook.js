@@ -18,15 +18,32 @@ export function isValidSignature(rawBody, header, appSecret) {
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
-// Claves de las apps de Meta cuyos eventos se aceptan: WHATSAPP_APP_SECRET (la principal) y, separadas por comas,
-// las de WHATSAPP_APP_SECRETS_EXTRA. Hace falta más de una cuando hay números en apps de Meta distintas
-// (cada app firma sus eventos con su propia clave). Sin la variable extra, el comportamiento es el de siempre.
-export function appSecrets(env = process.env) {
-  const extra = String(env.WHATSAPP_APP_SECRETS_EXTRA || '').split(',').map((s) => s.trim()).filter(Boolean);
-  return [env.WHATSAPP_APP_SECRET, ...extra].filter(Boolean);
+// Claves de las apps de Meta cuyos eventos se aceptan. Cada app firma sus eventos con su propia clave.
+// - WHATSAPP_APP_SECRET: la app principal (la de siempre). Vale para cualquier cuenta de WhatsApp que no sea de otra app.
+// - WHATSAPP_APP_SECRETS_EXTRA: apps adicionales, separadas por comas, cada una ATADA a su cuenta de WhatsApp Business:
+//   "<waba_id>:<clave>". Una clave adicional solo vale para los eventos de su cuenta, y la principal ya no vale para esas
+//   cuentas: así, si se filtra la clave de una app, no sirve para fabricar mensajes de los números de la otra.
+//   Una entrada sin "<waba_id>:" se ignora (con aviso), para que nunca quede una clave sin atar.
+// Sin la variable extra, el comportamiento es el de siempre.
+export function appSecrets(env = process.env, warn = console.warn) {
+  const list = env.WHATSAPP_APP_SECRET ? [{ secret: env.WHATSAPP_APP_SECRET, wabaId: null }] : [];
+  for (const item of String(env.WHATSAPP_APP_SECRETS_EXTRA || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const m = /^(\d{5,30}):(.+)$/.exec(item);
+    if (m) list.push({ wabaId: m[1], secret: m[2].trim() });
+    else warn('[whatsapp] WHATSAPP_APP_SECRETS_EXTRA: entrada ignorada, falta "<waba_id>:" antes de la clave');
+  }
+  return list;
 }
 
-export const isValidSignatureAny = (rawBody, header, secrets) => secrets.some((s) => isValidSignature(rawBody, header, s));
+// La clave (de la lista de appSecrets) con la que viene firmado el cuerpo, o null.
+export const matchingSecret = (rawBody, header, secrets) => secrets.find((s) => isValidSignature(rawBody, header, s.secret)) ?? null;
+
+// ¿Puede la app de esa clave mandar eventos de esta cuenta de WhatsApp (entry.id = waba_id)?
+export function entryAllowed(entryId, matched, secrets) {
+  const waba = entryId == null ? null : String(entryId);
+  if (matched.wabaId) return waba === matched.wabaId;
+  return !secrets.some((s) => s.wabaId && s.wabaId === waba);
+}
 
 // Apretón de manos al guardar el webhook en el panel de Meta.
 router.get('/', (req, res) => {
@@ -98,15 +115,20 @@ async function storeInbound(channel, parsed) {
 }
 
 router.post('/', (req, res) => {
-  if (!isValidSignatureAny(req.rawBody, req.get('x-hub-signature-256'), appSecrets())) {
-    return res.sendStatus(401);
-  }
+  const secrets = appSecrets();
+  const matched = matchingSecret(req.rawBody, req.get('x-hub-signature-256'), secrets);
+  if (!matched) return res.sendStatus(401);
   // Responder ya: Meta reintenta hasta 7 días si tardamos o fallamos.
   res.sendStatus(200);
 
   const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
   (async () => {
     for (const entry of entries) {
+      // Cada clave solo vale para su cuenta de WhatsApp: un evento de otra cuenta se descarta.
+      if (!entryAllowed(entry?.id, matched, secrets)) {
+        console.warn(`[whatsapp] evento descartado: la cuenta ${entry?.id ?? '(sin id)'} no corresponde a la app que lo firmó`);
+        continue;
+      }
       for (const change of entry.changes || []) {
         if (change.field !== 'messages') continue;
         const value = change.value || {};
@@ -114,6 +136,11 @@ router.post('/', (req, res) => {
         const channel = await channelByPhoneNumberId(value.metadata?.phone_number_id);
         if (!channel) {
           console.log(`[whatsapp] evento ignorado: phone_number_id desconocido (${value.metadata?.phone_number_id ?? 'ausente'})`);
+          continue;
+        }
+        // Si el canal tiene registrada su cuenta de WhatsApp, el evento debe venir de esa misma cuenta.
+        if (channel.wabaId && entry?.id != null && String(entry.id) !== String(channel.wabaId)) {
+          console.warn(`[whatsapp] evento descartado: el número ${channel.slug} no pertenece a la cuenta ${entry.id}`);
           continue;
         }
         for (const status of value.statuses || []) await applyStatus(status);

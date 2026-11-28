@@ -12,7 +12,7 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
     DB_HOST: process.env.TEST_DB_HOST, DB_PORT: process.env.TEST_DB_PORT, DB_USER: process.env.TEST_DB_USER,
     DB_PASSWORD: process.env.TEST_DB_PASSWORD ?? '', DB_NAME: process.env.TEST_DB_NAME,
     ADMIN_API_KEY: 'admin-key-admin-key-admin-key-1234', WHATSAPP_TOKEN: 'tok', WA_TOKEN_SECOND: 'tok2',
-    WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_VERIFY_TOKEN: 'verify',
+    WHATSAPP_APP_SECRET: 'appsecret', WHATSAPP_VERIFY_TOKEN: 'verify', WHATSAPP_APP_SECRETS_EXTRA: '7770001112223:otraclave',
     DB_TABLE_PREFIX: process.env.TEST_DB_TABLE_PREFIX ?? '',
   });
 
@@ -300,4 +300,26 @@ test('API completa: envío, idempotencia, webhooks, conversaciones', { skip: !en
   assert.equal((await call('GET', '/v1/me', { key: rotated.json.apiKey })).status, 200);
   await call('PATCH', '/v1/admin/clients/1', { key: process.env.ADMIN_API_KEY, body: { active: false } });
   assert.equal((await call('GET', '/v1/me', { key: rotated.json.apiKey })).status, 403);
+
+  // Varias apps de Meta: la clave extra (cuenta 7770001112223) solo vale para eventos de su cuenta; la principal ya no vale para esa
+  // cuenta; y un canal con wabaId solo acepta eventos de su cuenta ('main' es de la cuenta 900).
+  const deCuenta = (wabaId, phoneNumberId, text, secret) => metaPost({ entry: [{ id: wabaId, changes: [{ field: 'messages', value: {
+    metadata: { phone_number_id: phoneNumberId },
+    messages: [{ from: '5588888888', id: `wamid.waba.${text}`, type: 'text', text: { body: text }, timestamp: nowSec() }],
+  } }] }] }, secret);
+  const guardado = async (text) => Number((await pool.query(`SELECT COUNT(*) AS n FROM ${T.message} WHERE body = ?`, [text]))[0][0].n);
+  for (const [cuenta, numero, texto, clave] of [
+    ['7770001112223', '222', 'extra para su cuenta', 'otraclave'],
+    ['900', '111', 'extra fingiendo la cuenta principal', 'otraclave'],
+    ['7770001112223', '222', 'principal fingiendo la cuenta extra', 'appsecret'],
+    ['7770001112223', '111', 'cuenta extra con un número de otra cuenta', 'otraclave'],
+    ['900', '111', 'principal para su cuenta', 'appsecret'],
+  ]) assert.equal((await deCuenta(cuenta, numero, texto, clave)).status, 200, texto);
+  assert.equal((await metaPost({ entry: [] }, 'clave-ajena')).status, 401);
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(await guardado('extra para su cuenta'), 1);
+  assert.equal(await guardado('principal para su cuenta'), 1);
+  assert.equal(await guardado('extra fingiendo la cuenta principal'), 0);
+  assert.equal(await guardado('principal fingiendo la cuenta extra'), 0);
+  assert.equal(await guardado('cuenta extra con un número de otra cuenta'), 0);
 });
