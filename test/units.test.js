@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizePhone } from '../src/whatsapp.js';
 import { parseInboundMessage, describeWhatsAppError, serviceWindowUntil } from '../src/inbox.js';
 import { nextStatus } from '../src/messages.js';
-import { isValidSignature, isValidSignatureAny, appSecrets } from '../src/meta-webhook.js';
+import { isValidSignature, matchingSecret, appSecrets, entryAllowed } from '../src/meta-webhook.js';
 import { signBody } from '../src/outbound-webhooks.js';
 import { parseTemplateMessage, parseTextMessage, listParam } from '../src/validate.js';
 import crypto from 'node:crypto';
@@ -177,16 +177,30 @@ test('plantilla de autenticación: otpCode se valida y va en el cuerpo y en el b
   } finally { globalThis.fetch = original; }
 });
 
-test('varias apps de Meta: se acepta la firma de cualquiera de sus claves', () => {
+test('varias apps de Meta: cada clave extra queda atada a su cuenta de WhatsApp', () => {
   const body = Buffer.from('{"entry":[]}');
   const firma = (clave) => `sha256=${crypto.createHmac('sha256', clave).update(body).digest('hex')}`;
-  assert.deepEqual(appSecrets({ WHATSAPP_APP_SECRET: 'principal' }), ['principal'], 'sin extra, solo la principal');
-  assert.deepEqual(appSecrets({ WHATSAPP_APP_SECRET: 'principal', WHATSAPP_APP_SECRETS_EXTRA: ' otra , tercera ,, ' }), ['principal', 'otra', 'tercera']);
+  const avisos = [];
+  const env = { WHATSAPP_APP_SECRET: 'principal', WHATSAPP_APP_SECRETS_EXTRA: ' 1380951420855818:otra , sin-cuenta ,, ' };
+  const claves = appSecrets(env, (m) => avisos.push(m));
+  assert.deepEqual(claves, [{ secret: 'principal', wabaId: null }, { wabaId: '1380951420855818', secret: 'otra' }]);
+  assert.equal(avisos.length, 1, 'la entrada sin cuenta se ignora con aviso');
+  assert.deepEqual(appSecrets({ WHATSAPP_APP_SECRET: 'principal' }), [{ secret: 'principal', wabaId: null }], 'sin extra, como siempre');
   assert.deepEqual(appSecrets({}), []);
-  const claves = appSecrets({ WHATSAPP_APP_SECRET: 'principal', WHATSAPP_APP_SECRETS_EXTRA: 'otra' });
-  assert.equal(isValidSignatureAny(body, firma('principal'), claves), true);
-  assert.equal(isValidSignatureAny(body, firma('otra'), claves), true);
-  assert.equal(isValidSignatureAny(body, firma('ajena'), claves), false);
-  assert.equal(isValidSignatureAny(body, firma('otra'), appSecrets({ WHATSAPP_APP_SECRET: 'principal' })), false, 'sin la extra configurada, la otra app no pasa');
-  assert.equal(isValidSignatureAny(body, firma('x'), []), false, 'sin claves no pasa nada');
+
+  // Qué clave firmó.
+  assert.equal(matchingSecret(body, firma('principal'), claves).secret, 'principal');
+  assert.equal(matchingSecret(body, firma('otra'), claves).wabaId, '1380951420855818');
+  assert.equal(matchingSecret(body, firma('ajena'), claves), null);
+  assert.equal(matchingSecret(body, firma('sin-cuenta'), claves), null, 'una clave sin atar nunca se acepta');
+  assert.equal(matchingSecret(body, firma('x'), []), null);
+
+  // A qué cuentas puede mandar eventos cada clave.
+  const principal = claves[0], otra = claves[1];
+  assert.equal(entryAllowed('1380951420855818', otra, claves), true, 'la extra, para su cuenta');
+  assert.equal(entryAllowed('999999999999', otra, claves), false, 'la extra no vale para la cuenta de otra app');
+  assert.equal(entryAllowed(undefined, otra, claves), false, 'ni para un evento sin cuenta');
+  assert.equal(entryAllowed('999999999999', principal, claves), true, 'la principal, para su cuenta de siempre');
+  assert.equal(entryAllowed(undefined, principal, claves), true, 'y para eventos sin cuenta, como antes');
+  assert.equal(entryAllowed('1380951420855818', principal, claves), false, 'la principal ya no vale para la cuenta de la otra app');
 });
