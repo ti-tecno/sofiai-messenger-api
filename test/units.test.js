@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { normalizePhone } from '../src/whatsapp.js';
 import { parseInboundMessage, describeWhatsAppError, serviceWindowUntil } from '../src/inbox.js';
 import { nextStatus } from '../src/messages.js';
-import { isValidSignature } from '../src/meta-webhook.js';
+import { isValidSignature, isValidSignatureAny, appSecrets } from '../src/meta-webhook.js';
 import { signBody } from '../src/outbound-webhooks.js';
 import { parseTemplateMessage, parseTextMessage, listParam } from '../src/validate.js';
 import crypto from 'node:crypto';
@@ -175,4 +175,18 @@ test('plantilla de autenticación: otpCode se valida y va en el cuerpo y en el b
       { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: '482913' }] },
     ]);
   } finally { globalThis.fetch = original; }
+});
+
+test('varias apps de Meta: se acepta la firma de cualquiera de sus claves', () => {
+  const body = Buffer.from('{"entry":[]}');
+  const firma = (clave) => `sha256=${crypto.createHmac('sha256', clave).update(body).digest('hex')}`;
+  assert.deepEqual(appSecrets({ WHATSAPP_APP_SECRET: 'principal' }), ['principal'], 'sin extra, solo la principal');
+  assert.deepEqual(appSecrets({ WHATSAPP_APP_SECRET: 'principal', WHATSAPP_APP_SECRETS_EXTRA: ' otra , tercera ,, ' }), ['principal', 'otra', 'tercera']);
+  assert.deepEqual(appSecrets({}), []);
+  const claves = appSecrets({ WHATSAPP_APP_SECRET: 'principal', WHATSAPP_APP_SECRETS_EXTRA: 'otra' });
+  assert.equal(isValidSignatureAny(body, firma('principal'), claves), true);
+  assert.equal(isValidSignatureAny(body, firma('otra'), claves), true);
+  assert.equal(isValidSignatureAny(body, firma('ajena'), claves), false);
+  assert.equal(isValidSignatureAny(body, firma('otra'), appSecrets({ WHATSAPP_APP_SECRET: 'principal' })), false, 'sin la extra configurada, la otra app no pasa');
+  assert.equal(isValidSignatureAny(body, firma('x'), []), false, 'sin claves no pasa nada');
 });

@@ -231,7 +231,7 @@ Rutas de datos (todas con `Authorization: Bearer <ADMIN_API_KEY>`; las fechas en
 
 - `GET /health` → `{ "status": "ok" }` (503 `db_error` si la BD no responde). Sin autenticación.
 - `GET /v1/me` → tu app, sus `channels: [{ slug, name, displayPhone, isDefault }]`, si hay WhatsApp configurado y `sandbox: true|false`; útil para probar una llave.
-- `GET|POST /webhooks/whatsapp` — **solo para Meta** (verificación y eventos, con firma `X-Hub-Signature-256` y `WHATSAPP_APP_SECRET`). Es la URL que se pone en la configuración del webhook de la app de Meta: `https://<host>/webhooks/whatsapp`.
+- `GET|POST /webhooks/whatsapp` — **solo para Meta** (verificación y eventos, con firma `X-Hub-Signature-256` y `WHATSAPP_APP_SECRET`; si hay números en otras apps de Meta, sus claves van en `WHATSAPP_APP_SECRETS_EXTRA`, separadas por comas, y se acepta cualquiera). Es la URL que se pone en la configuración del webhook de la app de Meta: `https://<host>/webhooks/whatsapp`.
 
 ## 10. Datos y costos
 
@@ -243,7 +243,7 @@ Meta cobra **cada plantilla entregada** (también las de utilidad) y los número
 
 ## 11. Configuración del servidor
 
-Variables (ver `.env.example`): `PORT`, `DB_HOST/PORT/NAME/USER/PASSWORD`, `ADMIN_API_KEY` (≥24 caracteres), `WHATSAPP_TOKEN` (token permanente de un usuario del sistema), `WHATSAPP_PHONE_NUMBER_ID` y `WHATSAPP_BUSINESS_ACCOUNT_ID` (solo siembran el canal `default`), `WA_TOKEN_<CANAL>` (una por canal que no use `WHATSAPP_TOKEN`), `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_API_VERSION` (por defecto `v27.0`), `WHATSAPP_DEFAULT_COUNTRY` (por defecto `52`), y opcionalmente `DB_TABLE_PREFIX` (ver sección 10), `SSL_KEY_PATH`/`SSL_CERT_PATH` y `SEND_ALLOWLIST`.
+Variables (ver `.env.example`): `PORT`, `DB_HOST/PORT/NAME/USER/PASSWORD`, `ADMIN_API_KEY` (≥24 caracteres), `WHATSAPP_TOKEN` (token permanente de un usuario del sistema), `WHATSAPP_PHONE_NUMBER_ID` y `WHATSAPP_BUSINESS_ACCOUNT_ID` (solo siembran el canal `default`), `WA_TOKEN_<CANAL>` (una por canal que no use `WHATSAPP_TOKEN`), `WHATSAPP_APP_SECRET`, `WHATSAPP_APP_SECRETS_EXTRA` (opcional), `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_API_VERSION` (por defecto `v27.0`), `WHATSAPP_DEFAULT_COUNTRY` (por defecto `52`), y opcionalmente `DB_TABLE_PREFIX` (ver sección 10), `SSL_KEY_PATH`/`SSL_CERT_PATH` y `SEND_ALLOWLIST`.
 
 **Sandbox (`SEND_ALLOWLIST`).** Lista de teléfonos separados por comas. Si está definida, cualquier destino fuera de ella se rechaza **antes** de guardar o llamar a Meta (`403 RECIPIENT_NOT_ALLOWED`; en el lote, `skipped` con `reason: "not_allowed"`). `/v1/me` devuelve `sandbox: true` y el arranque lo avisa en el log. Úsala siempre en desarrollo.
 
